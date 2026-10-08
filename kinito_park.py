@@ -139,6 +139,461 @@ def make_scare_texture():
     upload("scare", pygame.image.tobytes(s, "RGBA", True), 177, 131, mip=False, repeat=False)
 
 
+QUIZ_BOARD = (36, 58, 568, 376)     # лист бумаги опроса внутри деревянного фона
+FURN_MARGIN, FURN_BAR, FURN_TRAY = 16, 36, 118
+
+
+def _upload_surf(name, surf, repeat=False):
+    surf = surf.convert_alpha()
+    upload(name, pygame.image.tobytes(surf, "RGBA", True), surf.get_width(), surf.get_height(),
+           mip=False, repeat=repeat)
+
+
+def _blit_leaf(dst, x, y, ang, length, width, col):
+    leaf = pygame.Surface((width, length), pygame.SRCALPHA)
+    pygame.draw.ellipse(leaf, col, (0, 1, width - 1, length - 2))
+    vein = tuple(max(0, c - 55) for c in col)
+    pygame.draw.line(leaf, vein, (width // 2, 3), (width // 2, length - 4), 1)
+    rot = pygame.transform.rotate(leaf, ang)
+    dst.blit(rot, rot.get_rect(center=(int(x), int(y))))
+
+
+def _leaf_ring(w, h, rect):
+    """Плотная лиственная рамка вокруг прямоугольника, остальное прозрачное."""
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    rng = random.Random(11)
+    greens = ((18, 108, 28), (34, 148, 40), (12, 82, 22), (56, 166, 46),
+              (24, 126, 32), (8, 68, 18), (74, 176, 52), (28, 96, 30))
+    x, y, rw, rh = rect
+    for grow, step, llen in ((0, 7, (16, 26)), (7, 9, (12, 20))):
+        edges = (
+            (x - grow, y, x + rw + grow, y, -90, max(8, int((rw + 16) / step))),
+            (x - grow, y + rh, x + rw + grow, y + rh, 90, max(8, int((rw + 16) / step))),
+            (x, y - grow, x, y + rh + grow, 180, max(8, int((rh + 16) / step))),
+            (x + rw, y - grow, x + rw, y + rh + grow, 0, max(8, int((rh + 16) / step))),
+        )
+        for x0, y0, x1, y1, ang, n in edges:
+            for i in range(n):
+                t = (i + rng.random() * 0.35) / n
+                px = x0 + (x1 - x0) * t + rng.randint(-2, 2)
+                py = y0 + (y1 - y0) * t + rng.randint(-2, 2)
+                col = greens[rng.randrange(len(greens))]
+                _blit_leaf(surf, px, py, ang + rng.randint(-32, 32),
+                           rng.randint(*llen), rng.randint(7, 12), col)
+    return surf
+
+
+SW, SH = 64, 64
+
+
+def _scene(col):
+    surf = pygame.Surface((SW, SH))
+    surf.fill(col)
+    return surf
+
+
+def _dot(surf, x, y, col):
+    if 0 <= x < SW and 0 <= y < SH:
+        surf.set_at((int(x), int(y)), col)
+
+
+def _blob(surf, cx, cy, rx, ry, col):
+    for y in range(int(cy - ry), int(cy + ry) + 1):
+        for x in range(int(cx - rx), int(cx + rx) + 1):
+            if ry and rx and ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1:
+                _dot(surf, x, y, col)
+
+
+def _tri(surf, x, top, bottom, half, col):
+    span = max(1, bottom - top)
+    for y in range(int(top), int(bottom)):
+        w = max(1, int(half * (y - top) / span))
+        pygame.draw.line(surf, col, (x - w, y), (x + w, y))
+
+
+def _up(surf):
+    return pygame.transform.scale(surf, (160, 160)).convert_alpha()
+
+
+def _season_spring():
+    """Небо, луг и три цветущих дерева."""
+    s = _scene((112, 188, 232))
+    _blob(s, 16, 10, 9, 4, (246, 250, 255))
+    _blob(s, 44, 8, 11, 4, (236, 246, 255))
+    pygame.draw.rect(s, (86, 178, 64), (0, 36, SW, 28))
+    pygame.draw.rect(s, (64, 156, 48), (0, 48, SW, 16))
+    for cx, top in ((14, 28), (33, 24), (50, 30)):
+        pygame.draw.rect(s, (118, 74, 44), (cx, top + 6, 3, 16))
+        _blob(s, cx + 1, top + 2, 8, 7, (244, 126, 168))
+        _blob(s, cx - 4, top, 4, 4, (255, 176, 198))
+        _blob(s, cx + 5, top + 4, 4, 3, (214, 86, 132))
+    return _up(s)
+
+
+def _season_summer():
+    """Синее небо, птицы, зелёный холм и тёмная кромка леса."""
+    s = _scene((62, 166, 228))
+    ink = (28, 36, 48)
+    for bx, by in ((18, 12), (30, 9), (44, 14)):
+        _dot(s, bx, by, ink)
+        _dot(s, bx - 1, by - 1, ink)
+        _dot(s, bx + 1, by - 1, ink)
+        _dot(s, bx - 2, by, ink)
+        _dot(s, bx + 2, by, ink)
+    for x in range(SW):
+        crest = 26 + int(6 * math.sin(x / 7.0)) - x // 16
+        pygame.draw.line(s, (168, 206, 62), (x, crest), (x, 46))
+        pygame.draw.line(s, (186, 214, 78), (x, crest), (x, crest + 6))
+    pygame.draw.rect(s, (24, 92, 32), (0, 46, SW, 18))
+    for x in range(0, SW, 4):
+        h = 6 + (x * 3) % 5
+        pygame.draw.rect(s, (16, 72, 26), (x, 46 - h, 3, h + 4))
+    return _up(s)
+
+
+def _season_autumn():
+    """Осенние кроны и домик посреди них."""
+    s = _scene((214, 108, 28))
+    rng = random.Random(4)
+    for _ in range(90):
+        _blob(s, rng.randint(2, 61), rng.randint(2, 60), rng.randint(3, 7), rng.randint(3, 6),
+              rng.choice(((196, 72, 18), (232, 132, 28), (168, 48, 16), (240, 160, 40))))
+    pygame.draw.rect(s, (150, 196, 220), (22, 4, 20, 10))
+    pygame.draw.polygon(s, (92, 58, 32), [(18, 36), (32, 22), (46, 36)])
+    pygame.draw.rect(s, (118, 72, 40), (20, 36, 24, 16))
+    pygame.draw.rect(s, (70, 42, 24), (29, 42, 6, 10))
+    pygame.draw.rect(s, (186, 214, 230), (22, 40, 5, 5))
+    pygame.draw.rect(s, (186, 214, 230), (37, 40, 5, 5))
+    pygame.draw.rect(s, (150, 150, 154), (40, 24, 3, 8))
+    pygame.draw.rect(s, (120, 78, 36), (28, 52, 8, 6))
+    return _up(s)
+
+
+def _season_winter():
+    """Снежные ели и дорожка между ними."""
+    s = _scene((176, 196, 214))
+    pygame.draw.rect(s, (232, 238, 244), (0, 40, SW, 24))
+    pygame.draw.polygon(s, (214, 224, 232), [(24, 64), (32, 40), (40, 64)])
+    for x, top, h in ((10, 16, 30), (22, 22, 26), (34, 12, 34), (46, 20, 28), (56, 14, 32)):
+        _tri(s, x, top, top + h, 7, (36, 78, 62))
+        _tri(s, x, top - 1, top + 6, 4, (244, 248, 252))
+        pygame.draw.rect(s, (92, 64, 44), (x - 1, top + h - 4, 2, 6))
+    return _up(s)
+
+
+def _food_picture(kind):
+    s = pygame.Surface((48, 48))
+    s.fill((255, 244, 220))
+    if kind == "pizza":
+        pygame.draw.circle(s, (196, 120, 48), (24, 24), 20)
+        pygame.draw.circle(s, (186, 40, 36), (24, 24), 15)
+        for p in ((16, 16), (30, 18), (22, 30), (32, 28)):
+            pygame.draw.circle(s, (250, 210, 70), p, 3)
+    elif kind == "burger":
+        pygame.draw.ellipse(s, (150, 78, 32), (8, 8, 32, 12))
+        pygame.draw.rect(s, (70, 150, 40), (8, 18, 32, 6))
+        pygame.draw.rect(s, (120, 40, 28), (8, 24, 32, 8))
+        pygame.draw.ellipse(s, (214, 160, 64), (8, 30, 32, 10))
+    elif kind == "sushi":
+        s.fill((236, 228, 208))
+        for cx in (12, 24, 36):
+            pygame.draw.ellipse(s, (36, 36, 40), (cx - 8, 12, 16, 24))
+            pygame.draw.ellipse(s, (250, 250, 246), (cx - 6, 15, 12, 18))
+            pygame.draw.ellipse(s, (214, 64, 54), (cx - 4, 20, 8, 8))
+    else:
+        pygame.draw.rect(s, (236, 150, 170), (10, 22, 28, 16))
+        pygame.draw.polygon(s, (250, 190, 200), [(10, 22), (24, 8), (38, 22)])
+        pygame.draw.circle(s, (220, 50, 70), (24, 16), 2)
+    return pygame.transform.scale(s, (144, 144)).convert_alpha()
+
+
+def make_web_ui():
+    """Дерево, бумага и листья для опроса и меню мебели. Персонажей тут нет."""
+    wood = pygame.Surface((64, 128))
+    for i, x in enumerate(range(0, 64, 16)):
+        shade = 10 if i % 2 == 0 else -8
+        col = (78 + shade, 50 + shade, 28 + shade)
+        pygame.draw.rect(wood, col, (x, 0, 16, 128))
+        pygame.draw.line(wood, (46, 28, 16), (x, 0), (x, 127))
+    _upload_surf("ui_wood", wood, repeat=True)
+
+    paper = pygame.Surface((32, 32))
+    for y in range(2):
+        for x in range(2):
+            col = (244, 236, 214) if (x + y) % 2 == 0 else (232, 220, 192)
+            pygame.draw.rect(paper, col, (x * 16, y * 16, 16, 16))
+    _upload_surf("ui_paper", paper, repeat=True)
+
+    _upload_surf("ui_leaves", _leaf_ring(WIN_W, WIN_H, QUIZ_BOARD))
+    _upload_surf("ui_leaves_furn", _leaf_ring(WIN_W, WIN_H, (6, 6, WIN_W - 12, WIN_H - 12)))
+
+    tag = pygame.Surface((156, 34), pygame.SRCALPHA)
+    pygame.draw.rect(tag, (118, 72, 34), (0, 2, 156, 30))
+    pygame.draw.rect(tag, (62, 36, 16), (0, 2, 156, 30), 2)
+    pygame.draw.circle(tag, (48, 28, 14), (12, 17), 3)
+    pygame.draw.circle(tag, (48, 28, 14), (144, 17), 3)
+    _upload_surf("ui_tag", tag)
+
+    cur = pygame.Surface((18, 22), pygame.SRCALPHA)
+    arrow = [(1, 1), (1, 18), (5, 14), (8, 20), (11, 18), (8, 12), (15, 12)]
+    pygame.draw.polygon(cur, (20, 16, 12), arrow)
+    inner = [(3, 4), (3, 15), (6, 12), (8, 16), (10, 15), (7, 11), (13, 11)]
+    pygame.draw.polygon(cur, (255, 255, 255), inner)
+    _upload_surf("ui_cursor", cur)
+
+    for name, draw in (("spring", _season_spring), ("summer", _season_summer),
+                       ("autumn", _season_autumn), ("winter", _season_winter)):
+        _upload_surf("season_" + name, draw())
+    for i, kind in enumerate(("pizza", "burger", "sushi", "cake")):
+        _upload_surf("food_%d" % i, _food_picture(kind))
+    make_furn_icons()
+
+
+INK = (32, 20, 12)
+FW, FH = 64, 48
+
+
+def _ficon():
+    return pygame.Surface((FW, FH), pygame.SRCALPHA)
+
+
+def _r(s, x, y, w, h, col):
+    pygame.draw.rect(s, INK, (x - 1, y - 1, w + 2, h + 2))
+    pygame.draw.rect(s, col, (x, y, w, h))
+
+
+def _o(s, x, y, w, h, col):
+    pygame.draw.ellipse(s, INK, (x - 1, y - 1, w + 2, h + 2))
+    pygame.draw.ellipse(s, col, (x, y, w, h))
+
+
+def _poly(s, pts, col):
+    pygame.draw.polygon(s, col, pts)
+    pygame.draw.polygon(s, INK, pts, 1)
+
+
+def _icon_sofa():
+    s = _ficon()
+    _r(s, 6, 30, 8, 8, (96, 62, 36))
+    _r(s, 50, 30, 8, 8, (96, 62, 36))
+    _r(s, 8, 10, 48, 24, (186, 78, 124))
+    _r(s, 10, 12, 44, 8, (140, 48, 90))
+    _r(s, 8, 14, 8, 18, (160, 58, 104))
+    _r(s, 48, 14, 8, 18, (160, 58, 104))
+    for x in (16, 28, 40):
+        _r(s, x, 20, 10, 12, (230, 150, 180))
+    return s
+
+
+def _icon_chair():
+    s = _ficon()
+    _r(s, 14, 32, 6, 8, (40, 40, 44))
+    _r(s, 44, 32, 6, 8, (40, 40, 44))
+    _r(s, 16, 6, 32, 28, (48, 48, 54))
+    _r(s, 18, 8, 28, 10, (24, 24, 28))
+    _r(s, 14, 16, 8, 16, (36, 36, 40))
+    _r(s, 42, 16, 8, 16, (36, 36, 40))
+    _r(s, 20, 20, 24, 12, (90, 90, 98))
+    return s
+
+
+def _icon_table():
+    s = _ficon()
+    _r(s, 10, 28, 5, 12, (70, 44, 24))
+    _r(s, 49, 28, 5, 12, (70, 44, 24))
+    _o(s, 8, 8, 48, 26, (168, 112, 62))
+    _o(s, 16, 12, 32, 16, (206, 156, 96))
+    return s
+
+
+def _icon_lamp():
+    s = _ficon()
+    _o(s, 22, 34, 20, 8, (90, 64, 40))
+    _r(s, 30, 18, 4, 16, (70, 50, 32))
+    _poly(s, [(14, 18), (50, 18), (44, 8), (20, 8)], (236, 150, 176))
+    _o(s, 28, 12, 8, 6, (255, 230, 120))
+    return s
+
+
+def _icon_plant(big=False):
+    s = _ficon()
+    _poly(s, [(22, 28), (42, 28), (46, 42), (18, 42)], (176, 96, 52))
+    _r(s, 20, 26, 24, 4, (140, 74, 40))
+    leaves = ((32, 16, 16, 14), (18, 14, 14, 12), (36, 10, 14, 12), (24, 8, 12, 10))
+    if big:
+        leaves = ((32, 14, 20, 16), (14, 16, 16, 14), (38, 8, 16, 14), (22, 4, 14, 12), (30, 18, 8, 8))
+    for x, y, w, h in leaves:
+        _o(s, x, y, w, h, (40, 150, 58) if not big else (36, 140, 48))
+    if big:
+        _o(s, 28, 14, 8, 8, (230, 90, 120))
+    return s
+
+
+def _icon_shelf():
+    s = _ficon()
+    _r(s, 8, 6, 48, 36, (150, 102, 58))
+    _r(s, 12, 10, 40, 28, (92, 60, 34))
+    colors = ((190, 48, 42), (48, 90, 180), (230, 190, 50), (48, 140, 70), (140, 60, 160))
+    x = 14
+    for i, col in enumerate(colors):
+        h = 16 + (i % 3) * 4
+        _r(s, x, 12 + (24 - h), 6, h, col)
+        x += 8
+    return s
+
+
+def _icon_chest():
+    s = _ficon()
+    _r(s, 10, 16, 44, 24, (168, 36, 40))
+    _r(s, 10, 10, 44, 12, (140, 24, 30))
+    _r(s, 12, 20, 40, 4, (210, 170, 50))
+    _r(s, 28, 18, 8, 8, (230, 196, 70))
+    return s
+
+
+def _icon_bush():
+    s = _ficon()
+    for x, y, w, h, col in ((8, 16, 22, 20, (30, 120, 40)), (34, 14, 22, 22, (48, 150, 52)),
+                            (20, 8, 24, 20, (70, 170, 60)), (18, 22, 28, 16, (24, 100, 36))):
+        _o(s, x, y, w, h, col)
+    return s
+
+
+def _icon_counter():
+    s = _ficon()
+    _r(s, 4, 20, 56, 20, (210, 214, 220))
+    _r(s, 4, 28, 56, 12, (150, 156, 164))
+    _r(s, 8, 8, 18, 14, (36, 36, 40))
+    for dx, dy in ((2, 2), (10, 2), (2, 8), (10, 8)):
+        _o(s, 8 + dx, 8 + dy, 5, 4, (180, 180, 186))
+    _o(s, 36, 12, 16, 12, (120, 170, 190))
+    _r(s, 42, 8, 3, 6, (170, 176, 182))
+    return s
+
+
+def _icon_dine():
+    s = _ficon()
+    for x in (8, 50):
+        _r(s, x, 16, 5, 24, (90, 58, 32))
+    _r(s, 6, 14, 52, 16, (176, 122, 70))
+    _o(s, 26, 16, 12, 10, (245, 245, 248))
+    _o(s, 29, 18, 6, 5, (220, 70, 60))
+    return s
+
+
+def _icon_seat():
+    s = _ficon()
+    _r(s, 18, 34, 5, 8, (90, 58, 32))
+    _r(s, 41, 34, 5, 8, (90, 58, 32))
+    _r(s, 16, 22, 32, 12, (186, 132, 74))
+    _r(s, 20, 6, 5, 20, (120, 78, 42))
+    _r(s, 39, 6, 5, 20, (120, 78, 42))
+    _r(s, 20, 8, 24, 6, (150, 100, 56))
+    return s
+
+
+def _icon_bed():
+    s = _ficon()
+    _r(s, 8, 8, 48, 32, (70, 48, 32))
+    _r(s, 12, 14, 40, 22, (245, 245, 248))
+    _r(s, 14, 16, 16, 10, (255, 255, 255))
+    _r(s, 14, 26, 36, 8, (255, 214, 70))
+    _o(s, 40, 28, 8, 6, (210, 90, 140))
+    return s
+
+
+def _icon_night():
+    s = _ficon()
+    _r(s, 16, 16, 32, 24, (168, 114, 64))
+    _r(s, 20, 22, 24, 12, (140, 92, 50))
+    _o(s, 28, 26, 6, 6, (230, 190, 80))
+    _r(s, 30, 6, 4, 10, (80, 56, 36))
+    _poly(s, [(24, 8), (40, 8), (36, 2), (28, 2)], (255, 220, 120))
+    return s
+
+
+def _icon_wardrobe():
+    s = _ficon()
+    _r(s, 10, 4, 44, 40, (150, 102, 56))
+    _r(s, 14, 8, 16, 32, (176, 126, 74))
+    _r(s, 34, 8, 16, 32, (176, 126, 74))
+    _o(s, 26, 22, 4, 4, (230, 196, 70))
+    _o(s, 34, 22, 4, 4, (230, 196, 70))
+    return s
+
+
+def _icon_desk():
+    s = _ficon()
+    _r(s, 8, 28, 6, 12, (90, 58, 32))
+    _r(s, 50, 28, 6, 12, (90, 58, 32))
+    _r(s, 6, 18, 52, 12, (176, 122, 70))
+    _r(s, 12, 20, 16, 8, (248, 248, 250))
+    _r(s, 40, 8, 4, 12, (80, 56, 36))
+    _poly(s, [(34, 10), (50, 10), (46, 4), (38, 4)], (255, 220, 110))
+    return s
+
+
+def _icon_bath():
+    s = _ficon()
+    _r(s, 8, 34, 6, 6, (180, 184, 190))
+    _r(s, 50, 34, 6, 6, (180, 184, 190))
+    _r(s, 6, 12, 52, 24, (170, 220, 210))
+    _r(s, 12, 16, 40, 16, (70, 160, 200))
+    _r(s, 28, 6, 4, 8, (190, 196, 202))
+    _o(s, 24, 4, 12, 6, (200, 206, 212))
+    return s
+
+
+def _icon_toilet():
+    s = _ficon()
+    _r(s, 18, 4, 28, 14, (236, 238, 242))
+    _o(s, 14, 16, 36, 26, (248, 248, 250))
+    _o(s, 20, 22, 24, 14, (190, 210, 220))
+    return s
+
+
+def _icon_sink():
+    s = _ficon()
+    _r(s, 8, 18, 48, 22, (230, 232, 236))
+    _o(s, 18, 22, 28, 14, (120, 176, 198))
+    _r(s, 30, 8, 4, 12, (180, 186, 192))
+    _r(s, 26, 6, 12, 4, (200, 206, 212))
+    return s
+
+
+def _icon_lcounter():
+    s = _ficon()
+    _r(s, 4, 22, 56, 18, (214, 216, 220))
+    _r(s, 4, 32, 56, 8, (160, 164, 170))
+    for x, col in ((8, (230, 90, 120)), (22, (240, 200, 60)), (36, (60, 120, 200)), (48, (60, 160, 80))):
+        _r(s, x, 12, 10, 12, col)
+    return s
+
+
+def _icon_washer():
+    s = _ficon()
+    _r(s, 12, 4, 40, 40, (240, 242, 246))
+    _o(s, 20, 12, 24, 24, (50, 56, 64))
+    _o(s, 26, 18, 12, 12, (150, 190, 210))
+    for i, x in enumerate((18, 28, 38)):
+        _o(s, x, 6, 4, 4, (80, 180, 90) if i == 0 else (180, 60, 60))
+    return s
+
+
+def make_furn_icons():
+    """Иконки панели: каждая собрана из нескольких фигур, чтобы читаться в клетке."""
+    icons = {
+        "sofa": _icon_sofa, "chair": _icon_chair, "table": _icon_table, "lamp": _icon_lamp,
+        "plant": _icon_plant, "shelf": _icon_shelf, "chest": _icon_chest, "bush": _icon_bush,
+        "counter": _icon_counter, "kplant": lambda: _icon_plant(True), "dine": _icon_dine,
+        "seat": _icon_seat, "bed": _icon_bed, "night": _icon_night, "wardrobe": _icon_wardrobe,
+        "desk": _icon_desk, "bath": _icon_bath, "toilet": _icon_toilet, "sink": _icon_sink,
+        "lcounter": _icon_lcounter, "washer": _icon_washer,
+    }
+    for name, draw in icons.items():
+        _upload_surf("fi_" + name, draw())
+
+
 # ----------------------------------------------------------------------------
 # Геометрия мира
 # ----------------------------------------------------------------------------
@@ -951,6 +1406,7 @@ class Game:
         make_label_texture("sign_mole", "ПОПАДИ ПО КРОТУ!", (86, 30, 158), (255, 226, 60))
         YW.make_textures()
         make_scare_texture()
+        make_web_ui()
         build_primitives()
         build_coaster_data()
         build_static()
@@ -1749,16 +2205,27 @@ class Game:
 
     def furnish_geom(self):
         f = self.furnish
+        m, bar, tray_h = FURN_MARGIN, FURN_BAR, FURN_TRAY
+        top = m + bar
         x0, z0, x1, z1 = -9.2, -7.85, 9.2, 7.85
         rw, rh = x1 - x0, z1 - z0
-        top, tray_h = 40, 108
-        area_h = WIN_H - top - tray_h
-        base = min((WIN_W - 12) / rw, (area_h - 6) / rh)
+        area_w = WIN_W - m * 2
+        area_h = WIN_H - top - tray_h - m
+        base = min((area_w - 8) / rw, (area_h - 6) / rh)
         scale = base * f["zoom"]
         dw, dh = rw * scale, rh * scale
-        fl = dict(lvl=f["floor"], ox=(WIN_W - dw) / 2 + f["pan_x"], oy=top + (area_h - dh) / 2 + f["pan_y"],
-                  scale=scale, dw=dw, dh=dh, x0=x0, z0=z0, view=(0, top, WIN_W, area_h))
-        return dict(floor=fl, tray=(0, WIN_H - tray_h, WIN_W, tray_h), top=top, tray_h=tray_h)
+        ox = m + (area_w - dw) / 2 + f["pan_x"]
+        oy = top + (area_h - dh) / 2 + f["pan_y"]
+        fl = dict(lvl=f["floor"], ox=ox, oy=oy, scale=scale, dw=dw, dh=dh, x0=x0, z0=z0,
+                  view=(m, top, area_w, area_h))
+        btns = dict(
+            f0=pygame.Rect(m + 8, m + 5, 84, 26),
+            f1=pygame.Rect(m + 100, m + 5, 84, 26),
+            default=pygame.Rect(WIN_W - m - 246, m + 5, 140, 26),
+            done=pygame.Rect(WIN_W - m - 100, m + 5, 92, 26),
+        )
+        return dict(floor=fl, tray=(m, WIN_H - m - tray_h, area_w, tray_h), top=top, tray_h=tray_h,
+                    margin=m, area_w=area_w, area_h=area_h, btns=btns)
 
     def furnish_w2s(self, x, z, fl):
         return fl["ox"] + (x - fl["x0"]) * fl["scale"], fl["oy"] + (z - fl["z0"]) * fl["scale"]
@@ -1776,13 +2243,14 @@ class Game:
         dragging = self.furnish["drag"]["id"] if self.furnish.get("drag") else None
         items = [it for it in self.furnish["items"] if not it.get("placed") and it["id"] != dragging]
         cols = 13
-        tw = WIN_W / cols
-        th = 50
-        ox, oy = 0, g["tray"][1] + 4
+        tx, ty, tw, _ = g["tray"]
+        cw = tw / cols
+        th = 44
+        ox, oy = tx, ty + 24
         slots = []
         for i, it in enumerate(items):
             c, r = i % cols, i // cols
-            slots.append((it, pygame.Rect(ox + c * tw + 2, oy + r * th, tw - 4, th - 4)))
+            slots.append((it, pygame.Rect(ox + c * cw + 2, oy + r * th, cw - 4, th - 4)))
         return slots
 
     def _tray_hit(self, pos, g):
@@ -1791,15 +2259,15 @@ class Game:
                 return it
         return None
 
-    def _hit_floor_btn(self, pos):
-        if pygame.Rect(8, 8, 78, 24).collidepoint(pos):
+    def _hit_floor_btn(self, pos, g):
+        if g["btns"]["f0"].collidepoint(pos):
             return 0
-        if pygame.Rect(90, 8, 78, 24).collidepoint(pos):
+        if g["btns"]["f1"].collidepoint(pos):
             return 1
         return None
 
-    def _hit_default(self, pos):
-        return pygame.Rect(WIN_W - 252, 8, 128, 24).collidepoint(pos)
+    def _hit_default(self, pos, g):
+        return g["btns"]["default"].collidepoint(pos)
 
     def _furnish_hit(self, pos, g):
         fl = self._floor_at(pos, g)
@@ -1836,14 +2304,10 @@ class Game:
             return
         if wx is None:
             return
-        x0, z0, x1, z1 = -9.2, -7.85, 9.2, 7.85
-        rw, rh = x1 - x0, z1 - z0
-        top, tray_h = 40, 108
-        area_h = WIN_H - top - tray_h
-        scale = min((WIN_W - 12) / rw, (area_h - 6) / rh) * f["zoom"]
-        dw, dh = rw * scale, rh * scale
-        f["pan_x"] = pos[0] - (wx - x0) * scale - (WIN_W - dw) / 2
-        f["pan_y"] = pos[1] - (wz - z0) * scale - (top + (area_h - dh) / 2)
+        met = self.furnish_geom()
+        fl = met["floor"]
+        f["pan_x"] = pos[0] - (wx - fl["x0"]) * fl["scale"] - (met["margin"] + (met["area_w"] - fl["dw"]) / 2)
+        f["pan_y"] = pos[1] - (wz - fl["z0"]) * fl["scale"] - (met["top"] + (met["area_h"] - fl["dh"]) / 2)
 
     def _set_furn_floor(self, lvl):
         f = self.furnish
@@ -1856,10 +2320,10 @@ class Game:
             return
         g = self.furnish_geom()
         if kind == "down":
-            if self._hit_done(pos, g):
+            if g["btns"]["done"].collidepoint(pos):
                 self.furnish_finish()
                 return
-            if self._hit_default(pos):
+            if self._hit_default(pos, g):
                 f["items"] = [dict(it) for it in YW.default_layout()]
                 f["drag"] = None
                 f["sel"] = None
@@ -1867,7 +2331,7 @@ class Game:
                 self._set_furn_floor(0)
                 self.audio.play("chime", .6)
                 return
-            floor = self._hit_floor_btn(pos)
+            floor = self._hit_floor_btn(pos, g)
             if floor is not None:
                 self._set_furn_floor(floor)
                 self.audio.play("tick", .45)
@@ -2017,12 +2481,14 @@ class Game:
     def _draw_icon(self, it, fl, parts):
         th = math.radians(it["ry"])
         co, si = math.cos(th), math.sin(th)
+        ink = (0.12, 0.07, 0.04, 1)
         for part in parts:
             if part[0] == "disk":
                 _, lx, lz, rad, col = part
                 wx = it["x"] + lx * co + lz * si
                 wz = it["z"] - lx * si + lz * co
                 sx, sy = self.furnish_w2s(wx, wz, fl)
+                self.disk(sx, sy, rad * fl["scale"] + 1.2, ink, 14)
                 self.disk(sx, sy, rad * fl["scale"], (*col, 1), 14)
                 continue
             _, lx, lz, a, b, col = part
@@ -2033,19 +2499,20 @@ class Game:
                 wz = it["z"] - (lx + ox) * si + (lz + oz) * co
                 pts.append(self.furnish_w2s(wx, wz, fl))
             self.poly(pts, (*col, 1))
+            self.loop(pts, ink)
 
-    def _draw_tray_icon(self, kind, cx, cy, pal):
-        spec = YW.piece_of(kind)
-        fit = 30.0 / max(spec["w"], spec["d"])
-        for part in YW.icon_parts(kind, pal["sofa"], pal["bed"]):
-            if part[0] == "disk":
-                _, lx, lz, rad, col = part
-                self.disk(cx + lx * fit, cy + lz * fit, max(1.6, rad * fit), (*col, 1), 12)
-                continue
-            _, lx, lz, a, b, col = part
-            hw, hd = a * fit / 2, b * fit / 2
-            x, y = cx + lx * fit, cy + lz * fit
-            self.poly([(x - hw, y - hd), (x + hw, y - hd), (x + hw, y + hd), (x - hw, y + hd)], (*col, 1))
+    def _draw_tray_icon(self, kind, rect):
+        alias = {"seat_a": "seat", "seat_b": "seat", "seat_c": "seat", "seat_d": "seat", "dchair": "seat"}
+        name = "fi_" + alias.get(kind, kind)
+        pad = 2
+        aw, ah = max(8, rect.w - pad * 2), max(8, rect.h - pad * 2)
+        if aw / ah > FW / FH:
+            h = ah
+            w = h * FW / FH
+        else:
+            w = aw
+            h = w * FH / FW
+        self.tex_quad(TEX[name], rect.centerx - w / 2, rect.centery - h / 2, w, h)
 
     def _draw_floor(self, fl, pal):
         wood, kitchen = (.76, .56, .38, 1), (.84, .66, .44, 1)
@@ -2074,6 +2541,19 @@ class Game:
         if fl["lvl"] == 0:
             self._plan_rect(fl, YW.DOOR_X - .75, 7.05, YW.DOOR_X + .75, 7.75, wood)
 
+    def ui_button(self, rect, label, kind, on=False):
+        if kind == "green":
+            fill = (0.42, 0.72, 0.28, 1) if on else (0.28, 0.58, 0.22, 1)
+            edge = (0.10, 0.32, 0.10, 1)
+            fg, outline = (255, 255, 255), (20, 60, 16)
+        else:
+            fill = (0.62, 0.42, 0.22, 1)
+            edge = (0.28, 0.16, 0.08, 1)
+            fg, outline = (255, 236, 190), (50, 28, 12)
+        self.rect(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, edge)
+        self.rect(rect.x, rect.y, rect.w, rect.h, fill)
+        self.text(label, 14, rect.centerx, rect.y + 4, fg, outline)
+
     def hud_furnish(self):
         W = WIN_W
         f = self.furnish
@@ -2081,21 +2561,14 @@ class Game:
         fl = g["floor"]
         season = self.quiz.get("season") if self.quiz and self.quiz.get("season") is not None else 1
         pal = YW.PAL[int(season)]
-        self.rect(0, 0, W, WIN_H, (.07, .03, .16, 1))
-        self.rect(0, 0, W, 40, (.14, .07, .26, 1))
-        for lvl, label, x in ((0, "1 этаж", 8), (1, "2 этаж", 90)):
-            on = f["floor"] == lvl
-            self.rect(x, 8, 78, 24, ((.55, .32, .78, 1) if on else (.28, .16, .4, 1)))
-            self.text(label, 14, x + 39, 10, (255, 255, 255), (40, 20, 70))
-        sel = YW.piece_of(f["sel"]) if f.get("sel") else None
-        sub = f["warn"] or ("Бери снизу. Колесо — крупнее." if not sel else sel["label"] + ". R — повернуть.")
-        self.text(sub, 12, 176, 12, (255, 150, 150) if f["warn"] else (220, 200, 235), None, "left")
-        self.rect(W - 252, 8, 128, 24, (.4, .24, .55, 1))
-        self.text("По умолчанию", 13, W - 188, 11, (255, 255, 255), (30, 15, 50))
-        self.rect(W - 112, 8, 96, 24, (.55, .32, .78, 1))
-        self.text("Готово", 16, W - 64, 10, (255, 255, 255), (40, 20, 70))
+        self.tex_quad(TEX["ui_wood"], 0, 0, W, WIN_H, uv=(0, 0, W / 64, WIN_H / 128))
+        self.ui_button(g["btns"]["f0"], "1 этаж", "green", f["floor"] == 0)
+        self.ui_button(g["btns"]["f1"], "2 этаж", "green", f["floor"] == 1)
+        self.ui_button(g["btns"]["default"], "По умолчанию", "wood")
+        self.ui_button(g["btns"]["done"], "Готово", "green")
+        vx, vy, vw, vh = fl["view"]
         glEnable(GL_SCISSOR_TEST)
-        glScissor(0, g["tray_h"], W, WIN_H - g["tray_h"] - g["top"])
+        glScissor(int(vx), int(WIN_H - (vy + vh)), int(vw), int(vh))
         self._draw_floor(fl, pal)
         bad = f["drag"] is not None and not YW.layout_ok(f["items"])
         placed = [it for it in f["items"] if it.get("placed") and it["lvl"] == fl["lvl"] and it["id"] != f.get("sel")]
@@ -2108,22 +2581,19 @@ class Game:
                 self.loop(pts, ((1, .3, .3, 1) if hot else (1, 1, 1, 1)))
         glDisable(GL_SCISSOR_TEST)
         tx, ty, tw, th = g["tray"]
-        self.rect(tx, ty, tw, th, (.1, .05, .16, 1))
+        self.rect(tx - 2, ty - 2, tw + 4, th + 4, (0.28, 0.16, 0.08, 1))
+        self.tex_quad(TEX["ui_wood"], tx, ty, tw, th, uv=(0, 0, tw / 64, th / 128))
+        sel = YW.piece_of(f["sel"]) if f.get("sel") else None
+        sub = f["warn"] or ("Бери снизу. Колесо — крупнее." if not sel else sel["label"] + ". R — повернуть.")
+        self.text(sub, 13, tx + 8, ty + 2, (160, 32, 24) if f["warn"] else (255, 236, 190), (40, 22, 10), "left")
         for it, rect in self._tray_slots(g):
             on = it["id"] == f.get("sel")
-            self.rect(rect.x, rect.y, rect.w, rect.h, ((.42, .26, .58, 1) if on else (.2, .12, .3, 1)))
-            self._draw_tray_icon(it["id"], rect.centerx, rect.centery, pal)
-        mx, my = pygame.mouse.get_pos()
-        glBindTexture(GL_TEXTURE_2D, TEX["white"])
-        glLineWidth(2)
-        for rad, col in ((8, (0, 0, 0)), (6.5, (1, 1, 1))):
-            glColor3f(*col)
-            glBegin(GL_LINE_LOOP)
-            for i in range(16):
-                a = i * TAU / 16
-                glVertex2f(mx + math.cos(a) * rad, my + math.sin(a) * rad)
-            glEnd()
-        glLineWidth(1)
+            self.rect(rect.x, rect.y, rect.w, rect.h, (0.36, 0.62, 0.28, 1) if on else (0.45, 0.30, 0.16, 1))
+            self._draw_tray_icon(it["id"], rect)
+        self.tex_quad(TEX["ui_leaves_furn"], 0, 0, W, WIN_H)
+        if not self.shot:
+            mx, my = pygame.mouse.get_pos()
+            self.tex_quad(TEX["ui_cursor"], mx, my, 18, 22)
 
     def enter_world(self, ride):
         """Тест/переход: оказаться в «Твоём мире» (ride=True - на горках над лесом, иначе - у посадки)."""
@@ -2182,34 +2652,63 @@ class Game:
                 self.sync_music()
             self.wtrans = None
 
+    def quiz_geom(self):
+        board = pygame.Rect(*QUIZ_BOARD)
+        tag = pygame.Rect(board.x + 18, board.y - 16, 156, 34)
+        n, gap, pad, label_h, top = 4, 12, 16, 22, 78
+        avail = board.w - pad * 2
+        cw = (avail - gap * (n - 1)) / n
+        ch = min(cw, board.h - top - label_h - 14)
+        total = cw * n + gap * (n - 1)
+        x0 = board.x + (board.w - total) / 2
+        y0 = board.y + top + max(0, (board.h - top - label_h - ch) / 2)
+        cards = [pygame.Rect(x0 + i * (cw + gap), y0, cw, ch) for i in range(n)]
+        return dict(board=board, tag=tag, cards=cards)
+
+    def quiz_click(self, pos):
+        if not self.quiz or self.quiz.get("phase") != "ask":
+            return
+        for i, rect in enumerate(self.quiz_geom()["cards"]):
+            if rect.collidepoint(pos):
+                self.quiz_pick(i)
+                return
+
     def hud_quiz(self):
         W, H = WIN_W, WIN_H
         qz = self.quiz
-        self.rect(0, 0, W, H, (.07, .03, .16, 1))
-        # декоративные «шахматные» ленты как на вывеске парка
-        band = 12
-        for i in range(16):
-            c = (.9, .1, .2, .9) if i % 2 == 0 else (.12, .16, .9, .9)
-            self.rect(i * W / 16, 0, W / 16 + 1, band, c)
-            self.rect(i * W / 16, H - band, W / 16 + 1, band, c)
-        pw, ph = min(560, W - 48), min(400, H - 48)
-        x0, y0 = (W - pw) / 2, (H - ph) / 2
-        self.rect(x0, y0, pw, ph, (.1, .06, .22, .96))
-        self.rect(x0 + 4, y0 + 4, pw - 8, ph - 8, (.34, .2, .6, .35))
-        cx = W / 2
-        self.text("KINITO PARK", 28, cx, y0 + 14, (255, 226, 60), (90, 30, 140))
-        self.text("Прежде чем ты войдёшь в парк, давай познакомимся.", 16, cx, y0 + 52, (230, 200, 255), (40, 20, 80))
-        self.text("Вопрос %d из 2" % (qz["step"] + 1), 16, cx, y0 + 78, (200, 200, 220), None)
+        g = self.quiz_geom()
+        board = g["board"]
+        self.tex_quad(TEX["ui_wood"], 0, 0, W, H, uv=(0, 0, W / 64, H / 128))
+        self.tex_quad(TEX["ui_paper"], board.x, board.y, board.w, board.h,
+                      uv=(0, 0, board.w / 32, board.h / 32))
+        edge = (0.10, 0.42, 0.14, 1)
+        t = 8
+        self.rect(board.x - t, board.y - t, board.w + t * 2, t, edge)
+        self.rect(board.x - t, board.bottom, board.w + t * 2, t, edge)
+        self.rect(board.x - t, board.y, t, board.h, edge)
+        self.rect(board.right, board.y, t, board.h, edge)
+        self.tex_quad(TEX["ui_leaves"], 0, 0, W, H)
+        self.tex_quad(TEX["ui_tag"], g["tag"].x, g["tag"].y, g["tag"].w, g["tag"].h)
+        self.text("Вопрос %d" % (qz["step"] + 1), 16, g["tag"].centerx, g["tag"].y + 6,
+                  (255, 214, 64), (60, 32, 12))
         if qz["step"] == 0:
-            q, opts = "Какое твоё любимое время года?", YW.SEASONS
+            question = "Какое твоё любимое время года?"
+            names = YW.SEASONS
+            texs = ("season_spring", "season_summer", "season_autumn", "season_winter")
         else:
-            q, opts = "Какая твоя любимая еда?", YW.FOODS
-        self.text(q, 22, cx, y0 + 112, (255, 255, 255), (60, 30, 120))
-        for i, o in enumerate(opts):
-            self.text("[%d]  %s" % (i + 1, o), 24, cx - 100, y0 + 156 + i * 38, (255, 226, 120), (60, 30, 120), "left")
-        note = "Я всё запомню..." if qz["step"] == 0 else "Спасибо. Теперь нарисуй для меня."
-        self.text(note, 16, cx, y0 + ph - 64, (230, 200, 255), (40, 20, 80))
-        self.text("Нажми 1-4", 16, cx, y0 + ph - 36, (200, 200, 220), None)
+            question = "Какая твоя любимая еда?"
+            names = YW.FOODS
+            texs = tuple("food_%d" % i for i in range(4))
+        self.text(question, 20, W / 2, board.y + 36, (64, 46, 32), None)
+        mx, my = pygame.mouse.get_pos()
+        for i, rect in enumerate(g["cards"]):
+            hot = rect.collidepoint((mx, my))
+            border = (1, 0.84, 0.2, 1) if hot else (0.12, 0.08, 0.05, 1)
+            self.rect(rect.x - 3, rect.y - 3, rect.w + 6, rect.h + 6, border)
+            self.tex_quad(TEX[texs[i]], rect.x, rect.y, rect.w, rect.h)
+            self.text(names[i], 15, rect.centerx, rect.bottom + 4, (58, 40, 26), None)
+        if not self.shot:
+            self.tex_quad(TEX["ui_cursor"], mx, my, 18, 22)
 
     def ensure_paint_icons(self):
         if getattr(self, "_paint_icons", False):
@@ -2743,6 +3242,8 @@ class Game:
         elif self.quiz:
             pygame.mouse.get_rel()
             self.vx = self.vz = 0.0
+            if self.quiz.get("phase") == "ask":
+                pygame.event.set_grab(False)
         elif self.wtrans:
             self.update_trans(dt)
         else:
@@ -3795,6 +4296,8 @@ class Game:
                         self.paint_pointer(e.pos, "down")
                     elif phase == "furnish":
                         self.furnish_pointer(e.pos, "down")
+                    elif phase == "ask":
+                        self.quiz_click(e.pos)
                     else:
                         self.click()
                 elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 3 and self.quiz and self.quiz.get("phase") == "furnish":
