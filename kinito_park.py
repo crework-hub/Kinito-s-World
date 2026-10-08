@@ -1975,6 +1975,40 @@ class Game:
         self.quiz = None
         self.park_t0 = self.t
 
+    def camera_snapshot(self):
+        """Один кадр с вебкамеры. None, если камеры нет или она занята."""
+        try:
+            import cv2
+        except ImportError:
+            return None
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        try:
+            if not cap.isOpened():
+                return None
+            frame = None
+            for _ in range(12):
+                ok, shot = cap.read()
+                if ok and shot is not None:
+                    frame = shot
+            if frame is None:
+                return None
+            frame = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
+            h, w = frame.shape[:2]
+            return pygame.image.frombuffer(frame.tobytes(), (w, h), "RGB").copy()
+        except Exception:
+            return None
+        finally:
+            cap.release()
+
+    def blit_cover(self, dst, src):
+        """Заполнить холст кадром целиком, лишнее обрезать по краям."""
+        dw, dh = dst.get_size()
+        sw, sh = src.get_size()
+        scale = max(dw / max(1, sw), dh / max(1, sh))
+        nw, nh = max(1, int(sw * scale)), max(1, int(sh * scale))
+        img = pygame.transform.smoothscale(src, (nw, nh))
+        dst.blit(img, ((dw - nw) // 2, (dh - nh) // 2))
+
     def begin_drawing(self, index):
         if index >= len(DRAW_PROMPTS):
             self.begin_furnish()
@@ -1983,10 +2017,16 @@ class Game:
         surf.fill((255, 255, 255))
         name, _ = player_name()
         prompt = DRAW_PROMPTS[index][0]
+        react = ""
         if index == 0:
             prompt = "%s, давай порисуем. %s" % (name, prompt)
+        elif index == 3:
+            cam = self.camera_snapshot()
+            if cam is not None:
+                self.blit_cover(surf, cam)
+                react = "Я посмотрел в камеру. Это ты."
         self.paint = dict(surf=surf, tool="pencil", color=(0, 0, 0), last=None, down=False,
-                          line_a=None, dirty=True, snd_t=0.0, warn="", prompt=prompt, react="", live=0.0)
+                          line_a=None, dirty=True, snd_t=0.0, warn="", prompt=prompt, react=react, live=0.0)
         self.quiz["phase"] = "paint"
         self.quiz["draw_i"] = index
         pygame.event.set_grab(False)

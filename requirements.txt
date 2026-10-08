@@ -1,3 +1,4 @@
 pygame-ce
 PyOpenGL
 numpy
+opencv-python
