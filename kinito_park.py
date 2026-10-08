@@ -1981,7 +1981,7 @@ class Game:
         if index == 0:
             prompt = "%s, давай порисуем. %s" % (name, prompt)
         self.paint = dict(surf=surf, tool="pencil", color=(0, 0, 0), last=None, down=False,
-                          line_a=None, dirty=True, snd_t=0.0, warn="", prompt=prompt, react="")
+                          line_a=None, dirty=True, snd_t=0.0, warn="", prompt=prompt, react="", live=0.0)
         self.quiz["phase"] = "paint"
         self.quiz["draw_i"] = index
         pygame.event.set_grab(False)
@@ -2018,19 +2018,52 @@ class Game:
 
     def paint_geom(self):
         W, H = WIN_W, WIN_H
-        bar = 40
-        wx, wy, ww, wh = 8, bar + 4, W - 16, H - bar - 10
-        title, tools, pal = 22, 56, 50
-        canvas = (wx + tools + 6, wy + title + 4, ww - tools - 12, wh - title - pal - 8)
-        return dict(bar=(0, 0, W, bar), win=(wx, wy, ww, wh), title=(wx, wy, ww, title),
-                    tools=(wx + 4, wy + title + 4, tools - 8, wh - title - pal - 8),
-                    canvas=canvas, pal=(wx + 4, wy + wh - pal + 4, ww - 8, pal - 8))
+        m, bar, pal_h, tool_w = 16, 48, 78, 64
+        top = m + bar
+        board = pygame.Rect(m, top, W - m * 2, H - top - m)
+        tools = pygame.Rect(board.x + 8, board.y + 8, tool_w, board.h - pal_h - 12)
+        canvas = (tools.right + 8, board.y + 8, board.right - 8 - (tools.right + 8), tools.h)
+        pal = pygame.Rect(board.x + 8, board.bottom - pal_h + 4, board.w - 16, pal_h - 12)
+        bw, bh, gap = 52, 48, 6
+        ox = tools.x + (tools.w - bw) / 2
+        oy = tools.y + max(0, (tools.h - (5 * bh + 4 * gap)) / 2)
+        names = ("pencil", "brush", "fill", "line", "erase")
+        slots = [(name, pygame.Rect(ox, oy + i * (bh + gap), bw, bh)) for i, name in enumerate(names)]
+        sw, sh, gy = 34, 24, 6
+        span = pal.w - 56
+        gx = (span - 11 * sw) / 10
+        colors = []
+        for i, col in enumerate(PAINT_COLORS):
+            c, r = i % 11, i // 11
+            colors.append((col, pygame.Rect(pal.x + 48 + c * (sw + gx), pal.y + 6 + r * (sh + gy), sw, sh)))
+        done = pygame.Rect(W - m - 100, m + 11, 92, 26)
+        cur = pygame.Rect(pal.x + 6, pal.y + (pal.h - 36) / 2, 36, 36)
+        return dict(board=board, tools=tools, canvas=canvas, pal=pal, slots=slots,
+                    colors=colors, done=done, current=cur)
+
+    def _line_boil(self, surf, phase):
+        """Кадр line boil: куски линий сдвигаются на пиксель, заливка почти стоит."""
+        w, h = surf.get_size()
+        src = pygame.surfarray.array3d(surf)
+        xs = np.arange(w, dtype=np.int32)[:, None]
+        ys = np.arange(h, dtype=np.int32)[None, :]
+        cell = 7
+        hsh = ((xs // cell) * 17 + (ys // cell) * 31 + int(phase) * 13) % 5
+        table = np.array([[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]], np.int32)
+        sx = np.clip(xs - table[hsh, 0], 0, w - 1)
+        sy = np.clip(ys - table[hsh, 1], 0, h - 1)
+        out = pygame.Surface((w, h))
+        pygame.surfarray.blit_array(out, src[sx, sy])
+        return out
 
     def paint_upload(self):
         p = self.paint
-        if not p or not p["dirty"]:
+        if not p:
             return
-        surf = p["surf"]
+        phase = int(p.get("live", 0.0) * 8) % 4
+        if not p["dirty"] and p.get("_boil") == phase and "canvas" in TEX:
+            return
+        surf = self._line_boil(p["surf"], phase)
         w, h = surf.get_size()
         data = pygame.image.tobytes(surf, "RGBA", True)
         if "canvas" not in TEX:
@@ -2039,6 +2072,7 @@ class Game:
             glBindTexture(GL_TEXTURE_2D, TEX["canvas"])
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data)
         p["dirty"] = False
+        p["_boil"] = phase
 
     def paint_ink(self):
         arr = pygame.surfarray.array3d(self.paint["surf"])
@@ -2163,23 +2197,17 @@ class Game:
             p["line_a"] = None
 
     def _hit_done(self, pos, g):
-        W = WIN_W
-        return pygame.Rect(W - 118, 8, 100, 24).collidepoint(pos)
+        return g["done"].collidepoint(pos)
 
     def _hit_tool(self, pos, g):
-        x, y, w, _ = g["tools"]
-        names = ("pencil", "brush", "fill", "line", "erase")
-        for i, name in enumerate(names):
-            if pygame.Rect(x + 4, y + 4 + i * 34, 32, 30).collidepoint(pos):
+        for name, rect in g["slots"]:
+            if rect.collidepoint(pos):
                 return name
         return None
 
     def _hit_color(self, pos, g):
-        x, y, _, _ = g["pal"]
-        for i, col in enumerate(PAINT_COLORS):
-            colx = x + 46 + (i % 11) * 22
-            coly = y + 4 + (i // 11) * 20
-            if pygame.Rect(colx, coly, 20, 18).collidepoint(pos):
+        for col, rect in g["colors"]:
+            if rect.collidepoint(pos):
                 return col
         return None
 
@@ -2714,17 +2742,20 @@ class Game:
         if getattr(self, "_paint_icons", False):
             return
         def up(name, draw):
-            s = pygame.Surface((24, 24), pygame.SRCALPHA)
+            s = pygame.Surface((36, 36), pygame.SRCALPHA)
             draw(s)
-            upload(name, pygame.image.tobytes(s, "RGBA", True), 24, 24, mip=False, repeat=False)
-        up("icon_pencil", lambda s: (pygame.draw.line(s, (40, 40, 40), (5, 19), (15, 7), 2),
-                                      pygame.draw.polygon(s, (240, 210, 70), [(14, 5), (19, 10), (16, 11), (13, 7)])))
-        up("icon_brush", lambda s: (pygame.draw.line(s, (50, 50, 50), (5, 19), (13, 9), 4),
-                                     pygame.draw.circle(s, (30, 30, 30), (16, 7), 4)))
-        up("icon_fill", lambda s: pygame.draw.polygon(s, (40, 90, 200), [(6, 16), (10, 6), (16, 8), (18, 16), (8, 20)]))
-        up("icon_line", lambda s: pygame.draw.line(s, (20, 20, 20), (4, 18), (19, 5), 2))
-        up("icon_erase", lambda s: (pygame.draw.rect(s, (250, 170, 190), (5, 7, 14, 12)),
-                                     pygame.draw.rect(s, (80, 40, 50), (5, 7, 14, 12), 1)))
+            upload(name, pygame.image.tobytes(s, "RGBA", True), 36, 36, mip=False, repeat=False)
+        ink = (28, 18, 12)
+        up("icon_pencil", lambda s: (pygame.draw.line(s, ink, (6, 30), (24, 8), 4),
+                                      pygame.draw.polygon(s, (240, 196, 48), [(22, 4), (32, 14), (26, 16), (18, 6)])))
+        up("icon_brush", lambda s: (pygame.draw.line(s, (92, 58, 32), (6, 30), (20, 12), 6),
+                                     pygame.draw.circle(s, ink, (26, 8), 7),
+                                     pygame.draw.circle(s, (40, 40, 44), (26, 8), 4)))
+        up("icon_fill", lambda s: pygame.draw.polygon(s, (36, 110, 210),
+                                                      [(8, 28), (14, 6), (24, 10), (30, 26), (16, 32)]))
+        up("icon_line", lambda s: pygame.draw.line(s, ink, (6, 30), (30, 6), 4))
+        up("icon_erase", lambda s: (pygame.draw.rect(s, ink, (5, 8, 26, 20)),
+                                     pygame.draw.rect(s, (255, 214, 220), (7, 10, 22, 16))))
         self._paint_icons = True
 
     def hud_paint(self):
@@ -2734,70 +2765,54 @@ class Game:
         g = self.paint_geom()
         p = self.paint
         qz = self.quiz
-        self.rect(0, 0, W, H, (.07, .03, .16, 1))
-        self.rect(0, 0, W, g["bar"][3], (.14, .07, .26, 1))
-        self.text(p["prompt"], 14, 10, 3, (255, 236, 180), (40, 20, 70), "left")
+        board = g["board"]
+        self.tex_quad(TEX["ui_wood"], 0, 0, W, H, uv=(0, 0, W / 64, H / 128))
+        self.text(p["prompt"], 13, 22, 18, (255, 236, 190), (40, 22, 10), "left")
         sub = p["warn"] or p["react"] or ("Рисунок %d из %d" % (qz["draw_i"] + 1, len(DRAW_PROMPTS)))
-        self.text(sub, 13, 10, 20, (255, 150, 150) if p["warn"] else (220, 200, 235), None, "left")
-        self.rect(W - 112, 8, 96, 24, (.55, .32, .78, 1))
-        self.text("Готово", 16, W - 64, 10, (255, 255, 255), (40, 20, 70))
-        wx, wy, ww, wh = g["win"]
-        self.rect(wx, wy, ww, wh, (.80, .80, .76, 1))
-        self.rect(wx + 3, wy + 3, ww - 6, 18, (.70, .70, .66, 1))
-        self.text("untitled - Paint", 14, wx + 8, wy + 4, (30, 30, 30), None, "left")
-        self.rect(wx + ww - 22, wy + 4, 16, 14, (.86, .86, .82, 1))
-        self.text("x", 12, wx + ww - 14, wy + 4, (40, 40, 40), None)
-        tx, ty, _, _ = g["tools"]
-        icons = ("icon_pencil", "icon_brush", "icon_fill", "icon_line", "icon_erase")
-        names = ("pencil", "brush", "fill", "line", "erase")
-        for i, (icon, name) in enumerate(zip(icons, names)):
-            bx, by = tx + 4, ty + 4 + i * 34
+        self.text(sub, 13, 22, 36, (180, 40, 32) if p["warn"] else (255, 236, 190), (40, 22, 10), "left")
+        self.ui_button(g["done"], "Готово", "green")
+        self.tex_quad(TEX["ui_paper"], board.x, board.y, board.w, board.h,
+                      uv=(0, 0, board.w / 32, board.h / 32))
+        icons = {"pencil": "icon_pencil", "brush": "icon_brush", "fill": "icon_fill",
+                 "line": "icon_line", "erase": "icon_erase"}
+        for name, rect in g["slots"]:
             sel = p["tool"] == name
-            self.rect(bx, by, 32, 30, ((.55, .55, .70, 1) if sel else (.88, .88, .84, 1)))
-            self.tex_quad(TEX[icon], bx + 4, by + 3, 24, 24)
-        # текущий цвет, как зелёный квадрат в Paint
-        px0, py0, _, _ = g["pal"]
-        self.rect(px0 + 4, py0 + 6, 28, 28, (.55, .55, .55, 1))
+            self.ui_button(rect, "", "green" if sel else "wood", sel)
+            self.tex_quad(TEX[icons[name]], rect.x + 8, rect.y + 6, 36, 36)
+        cur = g["current"]
+        self.rect(cur.x - 2, cur.y - 2, cur.w + 4, cur.h + 4, (0.12, 0.07, 0.04, 1))
         cr, cg, cb = [c / 255 for c in p["color"]]
-        self.rect(px0 + 8, py0 + 10, 20, 20, (cr, cg, cb, 1))
-        for i, col in enumerate(PAINT_COLORS):
-            colx = px0 + 46 + (i % 11) * 22
-            coly = py0 + 6 + (i // 11) * 20
-            self.rect(colx, coly, 20, 18, (col[0] / 255, col[1] / 255, col[2] / 255, 1))
+        self.rect(cur.x, cur.y, cur.w, cur.h, (cr, cg, cb, 1))
+        for col, rect in g["colors"]:
+            self.rect(rect.x, rect.y, rect.w, rect.h, (col[0] / 255, col[1] / 255, col[2] / 255, 1))
             if col == p["color"]:
-                self.rect(colx - 1, coly - 1, 22, 20, (1, 1, 1, .0))
-                glBindTexture(GL_TEXTURE_2D, TEX["white"])
-                glColor3f(0, 0, 0)
-                glBegin(GL_LINE_LOOP)
-                glVertex2f(colx - 1, coly - 1)
-                glVertex2f(colx + 21, coly - 1)
-                glVertex2f(colx + 21, coly + 19)
-                glVertex2f(colx - 1, coly + 19)
-                glEnd()
+                self.rect(rect.x - 2, rect.y - 2, rect.w + 4, rect.h + 4, (1, 0.84, 0.2, 1))
+                self.rect(rect.x, rect.y, rect.w, rect.h, (col[0] / 255, col[1] / 255, col[2] / 255, 1))
         cx, cy, cw, ch = g["canvas"]
-        self.rect(cx - 2, cy - 2, cw + 4, ch + 4, (.45, .45, .45, 1))
+        self.rect(cx - 4, cy - 4, cw + 8, ch + 8, (0.22, 0.13, 0.07, 1))
         if "canvas" in TEX:
             self.tex_quad(TEX["canvas"], cx, cy, cw, ch)
         if p["down"] and p["tool"] == "line" and p["line_a"] and p["last"]:
             sw, sh = p["surf"].get_size()
-            cr, cg, cb = [c / 255 for c in p["color"]]
             glBindTexture(GL_TEXTURE_2D, TEX["white"])
             glColor3f(cr, cg, cb)
             glBegin(GL_LINES)
             glVertex2f(cx + p["line_a"][0] / sw * cw, cy + p["line_a"][1] / sh * ch)
             glVertex2f(cx + p["last"][0] / sw * cw, cy + p["last"][1] / sh * ch)
             glEnd()
-        mx, my = pygame.mouse.get_pos()
-        glBindTexture(GL_TEXTURE_2D, TEX["white"])
-        glLineWidth(2)
-        for rad, col in ((8, (0, 0, 0)), (6.5, (1, 1, 1))):
-            glColor3f(*col)
-            glBegin(GL_LINE_LOOP)
-            for i in range(16):
-                a = i * TAU / 16
-                glVertex2f(mx + math.cos(a) * rad, my + math.sin(a) * rad)
-            glEnd()
-        glLineWidth(1)
+        self.tex_quad(TEX["ui_leaves_furn"], 0, 0, W, H)
+        if not self.shot:
+            mx, my = pygame.mouse.get_pos()
+            glBindTexture(GL_TEXTURE_2D, TEX["white"])
+            glLineWidth(2)
+            for rad, col in ((9, (0, 0, 0)), (7, (1, 1, 1))):
+                glColor3f(*col)
+                glBegin(GL_LINE_LOOP)
+                for i in range(16):
+                    a = i * TAU / 16
+                    glVertex2f(mx + math.cos(a) * rad, my + math.sin(a) * rad)
+                glEnd()
+            glLineWidth(1)
 
     def interact(self):
         if self.mode != "park" or self.seq or self.quiz or self.wtrans:
@@ -3244,6 +3259,8 @@ class Game:
             self.vx = self.vz = 0.0
             if self.quiz.get("phase") == "ask":
                 pygame.event.set_grab(False)
+            elif self.quiz.get("phase") == "paint" and self.paint:
+                self.paint["live"] = self.paint.get("live", 0.0) + dt
         elif self.wtrans:
             self.update_trans(dt)
         else:
