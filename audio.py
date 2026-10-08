@@ -411,11 +411,18 @@ class Audio:
 
     # --- музыка
     def music_start(self):
-        if not self.ok or not os.path.exists(self.song_path):
+        self.music_play(self.song_path)
+
+    def music_play(self, path):
+        """Зациклить трек. Повторный вызов с тем же файлом не перезапускает его."""
+        if not self.ok or not path or not os.path.exists(path):
             return
+        if getattr(self, "_track", None) == path and pygame.mixer.music.get_busy():
+            return
+        self._track = path
         try:
-            pygame.mixer.music.load(self.song_path)
-            pygame.mixer.music.set_volume(self.music_vol)
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.set_volume(0 if self.muted else self.music_vol)
             pygame.mixer.music.play(-1)
         except Exception as e:
             print("music error:", e)

@@ -36,6 +36,7 @@ WALK_SPEED, RUN_SPEED = 4.0, 6.8
 HS_WALK, HS_RUN = 3.3, 5.2
 HERE = os.path.dirname(os.path.abspath(__file__))
 SONG = os.path.join(HERE, "song", "my_world.ogg")
+SEASON_SONG = [os.path.join(HERE, "song", name + ".ogg") for name in ("spring", "summer", "autumn", "winter")]
 FONT_PATH = os.path.join(HERE, "font", "EpilepsySansBold.ttf")
 
 # Рисовалка в начале игры, как MS Paint в KinitoPET. Пять рисунков вешаются дома вместо заготовок.
@@ -175,15 +176,17 @@ COASTER_PTS = [(-28, 1.2, -44), (-12, 1.2, -44), (8, 1.2, -44), (28, 1.8, -46), 
                (18, 5.5, -94), (20, 5, -90), (18, 5, -86), (14, 5, -84),            # второй разворот
                (2, 9, -84), (-12, 13, -84), (-28, 9, -84), (-44, 5, -84), (-56, 4, -84),
                (-62, 3.8, -81), (-65, 3.6, -75), (-62, 3.4, -69), (-56, 3.2, -66),  # третий разворот
-               (-42, 3.2, -66), (-20, 3.2, -66), (10, 3.2, -66), (36, 3.2, -66)]
+               (-42, 3.2, -66), (-20, 3.2, -66), (10, 3.2, -66), (36, 3.2, -66), (96, 3.2, -66)]
 CS_START = 14.0                  # положение поезда у платформы (s вдоль трассы)
-PORTAL_BACK = 24.0               # стена с шестиугольной дырой стоит за столько метров до конца трассы
-TUNNEL_LEN = 18.0
+PORTAL_BACK = 24.0               # пересчитывается после удлинения прямой, чтобы дырка осталась на месте
+RING_LEN = 18.0                  # красно-синие кольца
+WHITE_LEN = 52.0                 # белый проход за кольцами: его надо проезжать, а не проскакивать
 
 
 def build_coaster_data():
     COASTER.update(YW.make_track(COASTER_PTS, sigma_m=3.0))
-    COASTER["s_wall"] = COASTER["L"] - PORTAL_BACK
+    # стена с дыркой на прежнем месте: лишние метры прямой уходят в белый проход
+    COASTER["s_wall"] = COASTER["L"] - (PORTAL_BACK + WHITE_LEN)
 
 
 def coaster_at(s):
@@ -247,7 +250,7 @@ def tree_ok(x, z):
             return False
     if abs(x) < 34 and -50 < z < -38:
         return False
-    if -72 < x < 46 and -78 < z < -54:           # финальная прямая и стена с шестиугольной дырой
+    if -72 < x < 180 and -78 < z < -54:          # финальная прямая, дырка и длинный белый проход
         return False
     return True
 
@@ -396,9 +399,17 @@ def build_coaster_static():
     sw = COASTER["s_wall"]
     wp, wt = coaster_at(sw)
     # опоры не ставим внутри тоннеля (там рельсы идут на уровне дырки)
-    YW.build_track_geom(COASTER, supports=True, coll=COLL,
-                        skip=lambda a: wp[0] - 4 < a[0] and abs(a[2] - wp[2]) < 5)
-    YW.build_portal(wp, (wt[0], wt[2]), COLL)
+    fx, fz = wt[0], wt[2]
+    ln = math.hypot(fx, fz) or 1.0
+    fx, fz = fx / ln, fz / ln
+    span = RING_LEN + WHITE_LEN + 6.0
+
+    def in_tunnel(a):
+        dx, dz = a[0] - wp[0], a[2] - wp[2]
+        return -3.0 < dx * fx + dz * fz < span and abs(dx * fz - dz * fx) < 6.0
+
+    YW.build_track_geom(COASTER, supports=True, coll=COLL, skip=in_tunnel)
+    YW.build_portal(wp, (wt[0], wt[2]), COLL, white=WHITE_LEN)
     sx, sz = CS_STATION
     obj("box", sx, .3, sz, 26, .6, 6, (.92, .88, .96), "checker")
     for px in (-12, 12):
@@ -1040,7 +1051,6 @@ class Game:
         self.kstep_t = 0.0
         self.glitching = False
 
-        self.audio.music_start()
         pygame.mouse.set_visible(False)
         pygame.event.set_grab(True)
         pygame.mouse.get_rel()
@@ -1089,6 +1099,7 @@ class Game:
             self.try_resume()                              # опрос и рисунки, либо сразу парк, если уже сохранено
         if "--door" in args:
             self.door_open = 0.7
+        self.sync_music()
 
     # ------------------------------------------------------------------ GL
     def setup_gl(self):
@@ -1119,7 +1130,7 @@ class Game:
         n = 4
         arr = np.zeros((n, n, 4), np.uint8)
         for x, y in ((1, 0), (2, 0), (0, 1), (3, 1), (0, 2), (3, 2), (1, 3), (2, 3)):
-            arr[y, x] = (58, 36, 104, 255)
+            arr[y, x] = (255, 255, 255, 255)
         upload("cross", np.ascontiguousarray(arr), n, n, mip=False, repeat=False)
         # маска света фонаря (проецируется на геометрию): яркая середина, видимый край и тонкий ободок
         N = 128
@@ -1723,6 +1734,7 @@ class Game:
             self.px, self.pz = self.world.land_pos
             if not self.start:
                 self.yaw = 0.0
+            self.sync_music()
 
     def board_wride(self, v):
         w = self.world
@@ -1735,6 +1747,14 @@ class Game:
         self.last_clack = 0
         self.yaw = self.pitch = 0.0
         self.vx = self.vz = 0.0
+        self.sync_music()
+
+    def sync_music(self):
+        """В парке играет общая тема, в «Твоём мире» — трек выбранного сезона."""
+        if self.inw and self.world is not None:
+            self.audio.music_play(SEASON_SONG[self.world.season])
+        else:
+            self.audio.music_play(SONG)
 
     def start_trans(self, to):
         self.wtrans = dict(t=0.0, to=to, done=False)
@@ -1759,6 +1779,7 @@ class Game:
                 self.gy = 0.0
                 self.wflash = 1.0
                 self.say("С возвращением в парк!", 3.0)
+                self.sync_music()
             self.wtrans = None
 
     def hud_quiz(self):
@@ -1869,12 +1890,15 @@ class Game:
             glEnd()
         mx, my = pygame.mouse.get_pos()
         glBindTexture(GL_TEXTURE_2D, TEX["white"])
-        glColor3f(0, 0, 0)
-        glBegin(GL_LINE_LOOP)
-        glVertex2f(mx, my)
-        glVertex2f(mx + 4, my + 14)
-        glVertex2f(mx + 8, my + 11)
-        glEnd()
+        glLineWidth(2)
+        for rad, col in ((8, (0, 0, 0)), (6.5, (1, 1, 1))):
+            glColor3f(*col)
+            glBegin(GL_LINE_LOOP)
+            for i in range(16):
+                a = i * TAU / 16
+                glVertex2f(mx + math.cos(a) * rad, my + math.sin(a) * rad)
+            glEnd()
+        glLineWidth(1)
 
     def interact(self):
         if self.mode != "park" or self.seq or self.quiz or self.wtrans:
@@ -1952,10 +1976,13 @@ class Game:
                 self.last_clack = seg
                 self.audio.play("clack", clamp(r["v"] / 28, .25, .8))
             if k == "coaster":
-                # конец тоннеля: белый свет, и мы уже над лесом в «Твоём мире»
-                ramp = (r["s"] - (P["L"] - 11.0)) / 6.0
+                # белый проход длинный: свет нарастает всю дорогу, переключение в самом конце
+                white0 = (P["L"] - (PORTAL_BACK + WHITE_LEN)) + RING_LEN
+                if r["s"] > white0:
+                    r["v"] += (8.5 - r["v"]) * min(1.0, dt * 1.6)
+                ramp = (r["s"] - white0) / WHITE_LEN
                 if ramp > 0:
-                    self.wflash = max(self.wflash, clamp(ramp, 0, 1) ** 1.5)
+                    self.wflash = max(self.wflash, clamp(ramp, 0, 1) ** 1.15)
                     self.flash_hold = True
                 if ramp >= 1.0:
                     self.cs = CS_START

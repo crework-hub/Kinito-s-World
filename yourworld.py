@@ -155,9 +155,10 @@ def _hex(r, k):
     return r * math.cos(a), r * math.sin(a)
 
 
-def build_portal(center, fwd, coll=None):
+def build_portal(center, fwd, coll=None, white=52.0):
     """Огромная шахматная стена с шестиугольным отверстием и тоннелем из красно-синих колец.
-    center - точка трека (x,y,z) в отверстии, fwd - горизонтальное направление движения."""
+    За кольцами идёт длинный белый проход. center - точка трека в отверстии,
+    fwd - горизонтальное направление движения."""
     cx, cy, cz = center
     fx, fz = fwd
     n = math.hypot(fx, fz)
@@ -212,13 +213,32 @@ def build_portal(center, fwd, coll=None):
             glVertex3f(*W(c1, d_1, d1))
             glVertex3f(*W(c0, d_0, d1))
         glEnd()
-    # светящийся конец тоннеля
+    # длинный белый проход: его проезжают, и только в конце вспышка
+    rend = R_IN * (1 - .035 * NR)
+    nw = 18
     glDisable(GL_LIGHTING)
+    for r in range(nw):
+        d0 = DEPTH + white * r / nw
+        d1 = DEPTH + white * (r + 1) / nw
+        r0 = rend * (1 - .012 * r)
+        r1 = rend * (1 - .012 * (r + 1))
+        glColor3f(1, 1, 1)
+        glBegin(GL_QUADS)
+        for k in range(6):
+            a0, b0 = _hex(r0, k)
+            a1, b1 = _hex(r0, k + 1)
+            c0, d0h = _hex(r1, k)
+            c1, d1h = _hex(r1, k + 1)
+            glVertex3f(*W(a0, b0, d0))
+            glVertex3f(*W(a1, b1, d0))
+            glVertex3f(*W(c1, d1h, d1))
+            glVertex3f(*W(c0, d0h, d1))
+        glEnd()
     glColor3f(1, 1, 1)
     glBegin(GL_POLYGON)
     for k in range(6):
-        a, b = _hex(R_IN * (1 - .035 * NR) * 1.02, k)
-        glVertex3f(*W(a, b, DEPTH))
+        a, b = _hex(rend * (1 - .012 * nw) * 1.02, k)
+        glVertex3f(*W(a, b, DEPTH + white))
     glEnd()
     glEnable(GL_LIGHTING)
     if coll is not None:
@@ -722,7 +742,8 @@ class World:
                 (-5.2, 1.7, uy0, uy1), (3.0, 1.55, uy0, uy1)]),
             ("z", -HW, -1, -HD, HD, [
                 (-4.4, 1.6, wy0, wy1), (2.6, 1.6, wy0, wy1),
-                (-4.4, 1.6, uy0, uy1), (2.6, 1.6, uy0, uy1)]),
+                # верхнее окно у холла, не на стыке со стеной спальни (z = BZ)
+                (-6.0, 1.6, uy0, uy1), (2.6, 1.6, uy0, uy1)]),
             ("z", HW, 1, -HD, HD, [
                 (0.4, 1.55, wy0, wy1), (0.4, 1.55, uy0, uy1)]),
         ]
@@ -867,11 +888,16 @@ class World:
             if placed >= n:
                 break
             length = b - a
-            count = 1 if length < 4.6 else (2 if length < 8.2 else 3)
+            count = 1 if length < 4.8 else (2 if length < 8.4 else 3)
             count = min(count, n - placed)
             for i in range(count):
                 mid = a + (i + 1) / (count + 1) * length
-                w = 1.05 if length > 2.6 else .82
+                room = (b - .25) - (a + .25)
+                if room < .9:
+                    continue
+                w = min(1.15, room)
+                half = w / 2
+                mid = min(max(mid, a + .25 + half), b - .25 - half)
                 tex = "draw%d" % ((tex0 + placed) % 6)
                 if axis == "x":
                     self._pic(mid, y, c, ry, w, w * .72, tex)
@@ -1116,19 +1142,22 @@ class World:
         self._pendant(1.5, H1, -5.8)
         # -- картины только на сплошных кусках стен
         ins = .22
-        wins_f = [(DOOR_X, 1.3), (-6.2, 1.6), (4.0, 1.6)]
-        wins_b = [(-5.2, 1.7), (3.0, 1.55)]
+        # «дыры» для картин: окна, двери и стыки с перегородками, чтобы рама не уходила в угол
+        wins_f = [(DOOR_X, 1.3), (-6.2, 1.6), (4.0, 1.6), (AX, 1.1), (SX0, 1.4)]
+        wins_b = [(-5.2, 1.7), (3.0, 1.55), (AX, 1.1), (SX0, 1.6)]
         wins_w = [(-4.4, 1.6), (2.6, 1.6)]
-        self._hang("x", -HD + ins, 2.05, -HW + .8, HW - .8, wins_b, 0, 3, 0)
-        self._hang("x", HD - ins, 2.05, -HW + .8, HW - .8, wins_f, 180, 3, 2)
-        self._hang("z", -HW + ins, 2.05, -HD + .8, HD - .8, wins_w, 90, 2, 1)
-        self._hang("z", HW - ins, 2.05, -HD + .8, HD - .8, [(0.4, 1.55)], -90, 2, 3)
-        self._hang("z", AX - ins, 2.05, -HD + .9, HD - .9, [(0.0, 2.8)], -90, 2, 4)
-        self._hang("x", -HD + ins, U + 1.9, -HW + .8, HW - .8, wins_b, 0, 3, 1)
-        self._hang("x", HD - ins, U + 1.9, -HW + .8, HW - .8, [(-6.2, 1.6), (4.0, 1.6)], 180, 2, 5)
-        self._hang("z", -HW + ins, U + 1.9, -HD + .8, HD - .8, wins_w, 90, 2, 2)
-        self._hang("x", BZ + ins, U + 1.9, -HW + .8, RX - .55, [(BED_DX, 1.15)], 0, 2, 4)
-        self._hang("x", BZ - ins, U + 1.9, -HW + .8, SX0 - .7, [(BED_DX, 1.15), (BATH_DX, 1.15)], 180, 3, 0)
+        wins_wu = [(-6.0, 1.6), (2.6, 1.6), (BZ, 1.3)]
+        self._hang("x", -HD + ins, 2.05, -HW + 1.1, SX0 - 1.0, wins_b, 0, 3, 0)
+        self._hang("x", HD - ins, 2.05, -HW + 1.1, SX0 - 1.0, wins_f, 180, 3, 2)
+        self._hang("z", -HW + ins, 2.05, -HD + 1.1, HD - 1.1, wins_w, 90, 2, 1)
+        self._hang("z", HW - ins, 2.05, -HD + 1.1, HD - 1.1, [(0.4, 1.55)], -90, 2, 3)
+        self._hang("z", AX - ins, 2.05, -HD + 1.2, HD - 1.2, [(0.0, 3.2)], -90, 2, 4)
+        self._hang("x", -HD + ins, U + 1.9, -HW + 1.1, HW - 1.1, wins_b, 0, 3, 1)
+        self._hang("x", HD - ins, U + 1.9, -HW + 1.1, SX0 - 1.0, [(-6.2, 1.6), (4.0, 1.6), (AX, 1.1)], 180, 2, 5)
+        self._hang("z", -HW + ins, U + 1.9, -HD + 1.1, BZ - 1.0, [(-6.0, 1.6)], 90, 1, 2)
+        self._hang("z", -HW + ins, U + 1.9, BZ + 1.0, HD - 1.1, [(2.6, 1.6)], 90, 1, 3)
+        self._hang("x", BZ + ins, U + 1.9, -HW + 1.1, RX - .7, [(BED_DX, 1.4)], 0, 2, 4)
+        self._hang("x", BZ - ins, U + 1.9, -HW + 1.1, SX0 - 1.0, [(BED_DX, 1.4), (BATH_DX, 1.4)], 180, 3, 0)
         self.anchors = {
             "sofa": (-4.2, -3.6), "food": (3.7, 2.3), "shelf": (AX - .9, -5.6),
             "pics": (-6.4, -6.4), "kitchen": (3.7, -5.4), "stairs": (5.3, 6.7),
@@ -1280,6 +1309,8 @@ class World:
     def _weather(self, t, cam):
         s = self.season
         cx, cy, cz = cam
+        if abs(cx - WX) < HW - .3 and abs(cz - WZ) < HD - .3 and cy < H1:
+            return
         S = 40.0
         for i, (a, b, c, sp, ph) in enumerate(self.parts):
             if s == 3:
