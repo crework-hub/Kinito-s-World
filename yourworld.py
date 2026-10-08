@@ -2,11 +2,9 @@
 """
 «ТВОЙ МИР» (Your World) - домик игрока из финала KinitoPET.
 
-В начале игры Кинито задаёт вопросы (любимое время года и любимая еда). Когда американские горки
-доезжают до шестиугольной «дырки» в шахматной стене, игрок попадает в мир, который зависит от
-выбранного сезона: сначала горки летят над лесом, потом приезжают к двухэтажному дому
-(синяя обшивка, красная крыша, солнышко на фронтоне). Цвета, свет, погода и настроение комнат
-зависят от времени года, на столе стоит любимая еда, на стенах висят «рисунки игрока».
+В начале игры Кинито задаёт вопросы (любимое время года и любимая еда), просит рисунки и даёт
+расставить мебель по всему дому, как в Ready Repair. Когда американские горки доезжают до
+шестиугольной «дырки» в шахматной стене, игрок попадает в мир, который зависит от выбранного сезона.
 """
 import math
 import os
@@ -40,6 +38,279 @@ SEASON_ACC = ["весну", "лето", "осень", "зиму"]
 SEASON_NOM = ["весна", "лето", "осень", "зима"]
 FOODS = ["Пицца", "Бургер", "Суши", "Торт"]
 FOOD_LOW = ["пицца", "бургер", "суши", "торт"]
+
+# Весь дом: мебель можно ставить на обоих этажах, но не в стены, на лестницу и в дверные проходы.
+OUTER = (-8.65, -7.22, 8.55, 7.18)
+WALLS = {
+    0: ((0.78, -7.5, 1.08, -1.55), (0.78, 1.55, 1.08, 7.5), (6.28, -7.6, 9.2, 5.9)),
+    1: ((-9.1, -4.32, -6.15, -3.98), (-4.65, -4.32, 2.15, -3.98), (3.65, -4.32, 6.7, -3.98),
+        (-0.52, -4.15, -0.18, 3.85), (-0.52, 5.35, -0.18, 7.6),
+        (-0.35, 1.52, 6.55, 1.88), (6.38, -4.15, 6.72, 7.6), (6.4, -2.05, 9.05, 6.05)),
+}
+CLEAR = {
+    0: ((-2.95, 5.35, -0.65, 7.2), (-0.15, -1.45, 1.25, 1.45)),
+    1: ((-6.2, -4.55, -4.6, -3.75), (2.05, -4.55, 3.75, -3.75), (-0.75, 3.85, 0.2, 5.35)),
+}
+PIECES = (
+    dict(id="sofa", label="Диван", w=3.2, d=1.05),
+    dict(id="chair", label="Кресло", w=1.3, d=1.0),
+    dict(id="table", label="Столик", w=1.7, d=1.7, round=True),
+    dict(id="lamp", label="Лампа", w=0.7, d=0.7, round=True),
+    dict(id="plant", label="Цветок", w=0.8, d=0.8, round=True),
+    dict(id="shelf", label="Полка", w=1.7, d=0.5),
+    dict(id="chest", label="Сундук", w=0.55, d=0.55),
+    dict(id="bush", label="Куст", w=0.9, d=0.9, round=True),
+    dict(id="counter", label="Кухня", w=4.6, d=0.68),
+    dict(id="kplant", label="Цветок", w=1.05, d=1.05, round=True),
+    dict(id="dine", label="Стол", w=2.2, d=1.15),
+    dict(id="seat_a", label="Стул", w=0.48, d=0.5),
+    dict(id="seat_b", label="Стул", w=0.48, d=0.5),
+    dict(id="seat_c", label="Стул", w=0.48, d=0.5),
+    dict(id="seat_d", label="Стул", w=0.48, d=0.5),
+    dict(id="bed", label="Кровать", w=1.7, d=2.45),
+    dict(id="night", label="Тумба", w=0.55, d=0.55),
+    dict(id="wardrobe", label="Шкаф", w=1.6, d=0.7),
+    dict(id="desk", label="Стол", w=1.7, d=0.65),
+    dict(id="dchair", label="Стул", w=0.48, d=0.5),
+    dict(id="bath", label="Ванна", w=0.7, d=1.85),
+    dict(id="toilet", label="Унитаз", w=0.58, d=0.75),
+    dict(id="sink", label="Раковина", w=0.85, d=0.7, round=True),
+    dict(id="lcounter", label="Столешница", w=4.2, d=0.68),
+    dict(id="washer", label="Стиралка", w=0.85, d=0.85),
+)
+
+
+def piece_of(pid):
+    for p in PIECES:
+        if p["id"] == pid:
+            return p
+    return None
+
+
+def empty_layout():
+    """Ничего не стоит в комнатах: все предметы ждут в панели."""
+    return [dict(id=p["id"], x=0.0, z=0.0, ry=0, lvl=0, placed=False) for p in PIECES]
+
+
+def default_layout():
+    """Готовая расстановка, если игрок нажмёт «По умолчанию»."""
+    items = [
+        dict(id="sofa", x=-4.2, z=-5.5, ry=0, lvl=0),
+        dict(id="chair", x=-7.6, z=1.0, ry=90, lvl=0),
+        dict(id="table", x=-4.2, z=-3.5, ry=0, lvl=0),
+        dict(id="lamp", x=-1.4, z=-6.2, ry=0, lvl=0),
+        dict(id="plant", x=-7.9, z=-6.5, ry=0, lvl=0),
+        dict(id="shelf", x=0.48, z=-5.6, ry=-90, lvl=0),
+        dict(id="chest", x=-7.5, z=-3.0, ry=0, lvl=0),
+        dict(id="bush", x=0.15, z=6.3, ry=0, lvl=0),
+        dict(id="counter", x=3.7, z=-6.85, ry=0, lvl=0),
+        dict(id="kplant", x=5.7, z=-5.5, ry=0, lvl=0),
+        dict(id="dine", x=3.7, z=2.3, ry=0, lvl=0),
+        dict(id="seat_a", x=2.9, z=1.4, ry=0, lvl=0),
+        dict(id="seat_b", x=4.5, z=1.4, ry=0, lvl=0),
+        dict(id="seat_c", x=2.9, z=3.2, ry=180, lvl=0),
+        dict(id="seat_d", x=4.5, z=3.2, ry=180, lvl=0),
+        dict(id="bed", x=-7.35, z=1.5, ry=-90, lvl=1),
+        dict(id="night", x=-8.15, z=0.15, ry=0, lvl=1),
+        dict(id="wardrobe", x=-1.8, z=-3.15, ry=0, lvl=1),
+        dict(id="desk", x=-4.4, z=6.45, ry=0, lvl=1),
+        dict(id="dchair", x=-4.4, z=5.6, ry=180, lvl=1),
+        dict(id="bath", x=0.75, z=-2.5, ry=0, lvl=1),
+        dict(id="toilet", x=1.3, z=-0.2, ry=0, lvl=1),
+        dict(id="sink", x=4.6, z=0.85, ry=0, lvl=1),
+        dict(id="lcounter", x=3.3, z=6.7, ry=0, lvl=1),
+        dict(id="washer", x=5.5, z=3.7, ry=0, lvl=1),
+    ]
+    for it in items:
+        it["placed"] = True
+        it["ry"] = int(round(it["ry"] / 90.0)) * 90 % 360
+    return items
+
+
+def _corners(it):
+    spec = piece_of(it["id"])
+    hw, hd = spec["w"] / 2, spec["d"] / 2
+    th = math.radians(it["ry"])
+    c, s = math.cos(th), math.sin(th)
+    pts = []
+    for lx, lz in ((-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)):
+        pts.append((it["x"] + lx * c + lz * s, it["z"] - lx * s + lz * c))
+    return pts
+
+
+def _box_pts(box):
+    x0, z0, x1, z1 = box
+    return [(x0, z0), (x1, z0), (x1, z1), (x0, z1)]
+
+
+def _separated(a, b, slop=0.0):
+    """slop > 0 разрешает лёгкое касание (мебель вплотную к стене)."""
+    def axes(pts):
+        out = []
+        for i in range(4):
+            x0, z0 = pts[i]
+            x1, z1 = pts[(i + 1) % 4]
+            out.append((-(z1 - z0), x1 - x0))
+        return out
+
+    def proj(pts, ax):
+        dots = [p[0] * ax[0] + p[1] * ax[1] for p in pts]
+        return min(dots), max(dots)
+
+    for ax in axes(a) + axes(b):
+        a0, a1 = proj(a, ax)
+        b0, b1 = proj(b, ax)
+        if a1 < b0 + slop or b1 < a0 + slop:
+            return True
+    return False
+
+
+def layout_ok(items):
+    return layout_reason(items) is None
+
+
+def layout_reason(items):
+    if len(items) != len(PIECES):
+        return "count"
+    ids = [it["id"] for it in items]
+    if len(set(ids)) != len(PIECES) or any(piece_of(i) is None for i in ids):
+        return "ids"
+    x0, z0, x1, z1 = OUTER
+    shapes = []
+    for it in items:
+        if not it.get("placed"):
+            continue
+        if it.get("lvl") not in (0, 1):
+            return it["id"] + " floor"
+        pts = _corners(it)
+        shapes.append((it, pts))
+        for x, z in pts:
+            if x < x0 - 1e-3 or x > x1 + 1e-3 or z < z0 - 1e-3 or z > z1 + 1e-3:
+                return it["id"] + " outside"
+        lvl = it["lvl"]
+        for box in WALLS[lvl]:
+            if not _separated(pts, _box_pts(box), 0.03):
+                return it["id"] + " wall"
+        for box in CLEAR[lvl]:
+            if not _separated(pts, _box_pts(box), 0.0):
+                return it["id"] + " door"
+    for i in range(len(shapes)):
+        for j in range(i + 1, len(shapes)):
+            if shapes[i][0]["lvl"] != shapes[j][0]["lvl"]:
+                continue
+            if not _separated(shapes[i][1], shapes[j][1], -0.04):
+                return shapes[i][0]["id"] + "+" + shapes[j][0]["id"]
+    return None
+
+
+def sanitize_layout(raw):
+    """В доме только то, что игрок поставил. Остальное остаётся в панели."""
+    base = {it["id"]: it for it in empty_layout()}
+    if isinstance(raw, list):
+        for it in raw:
+            if not isinstance(it, dict) or it.get("id") not in base:
+                continue
+            if "placed" in it and not it["placed"]:
+                continue
+            try:
+                x, z = float(it["x"]), float(it["z"])
+                ry = int(round(float(it.get("ry", 0)) / 90.0)) * 90 % 360
+                lvl = int(it.get("lvl", 0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if lvl not in (0, 1):
+                continue
+            base[it["id"]] = dict(id=it["id"], x=x, z=z, ry=ry, lvl=lvl, placed=True)
+    items = [base[p["id"]] for p in PIECES]
+    for _ in range(len(PIECES) + 1):
+        if layout_ok(items):
+            return items
+        reason = layout_reason(items) or ""
+        bad = reason.split("+")[-1].split(" ")[0]
+        kicked = False
+        for it in items:
+            if it.get("placed") and it["id"] == bad:
+                it["placed"] = False
+                kicked = True
+                break
+        if not kicked:
+            for it in items:
+                if it.get("placed"):
+                    it["placed"] = False
+                    break
+    return items
+
+
+def _rot(x, z, ry, lx, lz):
+    th = math.radians(ry)
+    c, s = math.cos(th), math.sin(th)
+    return x + lx * c + lz * s, z - lx * s + lz * c
+
+
+def icon_parts(kind, sofa, bed):
+    """Вид сверху: локальные фигуры (ящик или круг), +z — перед предмета."""
+    wood, dark = (.62, .42, .28), (.40, .26, .16)
+    cloth = tuple(min(1, c + .22) for c in sofa)
+    back = tuple(max(0, c * .72) for c in sofa)
+    if kind == "sofa":
+        return [("box", 0, -.40, 3.15, .24, back), ("box", -1.46, .02, .26, .95, sofa),
+                ("box", 1.46, .02, .26, .95, sofa), ("box", 0, .06, 2.6, .62, cloth),
+                ("box", -.85, .08, .78, .40, sofa), ("box", 0, .08, .78, .40, sofa),
+                ("box", .85, .08, .78, .40, sofa)]
+    if kind == "chair":
+        return [("box", 0, -.36, 1.25, .22, (.05, .05, .07)), ("box", -.52, .02, .22, .9, (.12, .12, .14)),
+                ("box", .52, .02, .22, .9, (.12, .12, .14)), ("box", 0, .06, .85, .55, (.28, .28, .32))]
+    if kind == "table":
+        return [("disk", 0, 0, .78, wood), ("disk", 0, 0, .55, (.78, .58, .40)),
+                ("box", -.5, -.5, .12, .12, dark), ("box", .5, -.5, .12, .12, dark),
+                ("box", -.5, .5, .12, .12, dark), ("box", .5, .5, .12, .12, dark)]
+    if kind == "lamp":
+        return [("disk", 0, 0, .32, (1, .62, .75)), ("disk", 0, 0, .12, (.95, .9, .55))]
+    if kind in ("plant", "kplant", "bush"):
+        r = .42 if kind == "kplant" else (.38 if kind == "bush" else .28)
+        return [("disk", 0, .05, r, (.25, .58, .28)), ("disk", -.16, -.1, r * .7, (.18, .48, .22)),
+                ("disk", .18, -.08, r * .65, (.32, .66, .3)), ("disk", 0, .02, .16, (.72, .42, .28))]
+    if kind == "shelf":
+        return [("box", 0, 0, 1.7, .48, wood), ("box", 0, .08, 1.55, .22, (.9, .85, .7)),
+                ("box", -.55, .08, .18, .2, (.75, .2, .2)), ("box", -.2, .08, .16, .2, (.2, .35, .75)),
+                ("box", .15, .08, .2, .2, (.85, .7, .2)), ("box", .5, .08, .16, .2, (.3, .55, .3))]
+    if kind == "chest":
+        return [("box", 0, 0, .55, .55, (.62, .08, .1)), ("box", 0, -.06, .48, .16, (.4, .05, .06))]
+    if kind == "counter":
+        return [("box", 0, 0, 4.6, .68, (.84, .86, .9)), ("box", -1.55, -.02, .55, .4, (.12, .12, .14)),
+                ("box", -.75, -.02, .4, .32, (.2, .2, .24)), ("disk", 1.25, 0, .22, (.7, .72, .76))]
+    if kind == "dine":
+        return [("box", 0, 0, 2.2, 1.15, wood), ("disk", 0, 0, .22, (.95, .75, .35))]
+    if kind in ("seat_a", "seat_b", "seat_c", "seat_d", "dchair"):
+        return [("box", 0, -.16, .42, .1, dark), ("box", 0, .04, .4, .36, wood)]
+    if kind == "bed":
+        blanket = bed
+        return [("box", 0, 0, 1.7, 2.45, (.12, .12, .14)), ("box", 0, .05, 1.45, 2.05, (.95, .95, .97)),
+                ("box", 0, .35, 1.4, 1.15, blanket), ("box", 0, -.78, .7, .42, (1, 1, 1)),
+                ("disk", .15, .45, .18, (.86, .6, .93))]
+    if kind == "night":
+        return [("box", 0, 0, .55, .5, wood), ("disk", 0, 0, .12, (1, .95, .7))]
+    if kind == "wardrobe":
+        return [("box", 0, 0, 1.6, .7, wood), ("box", -.4, .22, .08, .08, (.9, .8, .3)),
+                ("box", .4, .22, .08, .08, (.9, .8, .3))]
+    if kind == "desk":
+        return [("box", 0, 0, 1.7, .65, wood), ("box", -.25, .02, .4, .28, (.95, .95, .9)),
+                ("disk", .45, 0, .12, (1, .95, .7))]
+    if kind == "bath":
+        return [("box", 0, 0, .7, 1.85, (.45, .82, .7)), ("box", .08, 0, .42, 1.45, (.2, .6, .9))]
+    if kind == "toilet":
+        return [("box", 0, -.22, .42, .28, (.9, .9, .92)), ("disk", 0, .12, .24, (1, 1, 1))]
+    if kind == "sink":
+        return [("disk", 0, 0, .38, (.95, .95, .97)), ("disk", 0, 0, .2, (.7, .82, .9)),
+                ("box", 0, -.28, .12, .16, (.75, .75, .78))]
+    if kind == "lcounter":
+        return [("box", 0, 0, 4.2, .68, (.86, .88, .92)), ("box", -1.3, .05, .35, .28, (.9, .25, .5)),
+                ("box", -.7, .05, .32, .28, (.9, .8, .25)), ("box", -.1, .05, .3, .28, (.3, .35, .8)),
+                ("box", .5, .05, .28, .28, (.3, .7, .4))]
+    if kind == "washer":
+        return [("box", 0, 0, .85, .85, (.94, .94, .96)), ("disk", -.12, 0, .28, (.25, .25, .3)),
+                ("disk", -.12, 0, .1, (.7, .75, .85))]
+    return [("box", 0, 0, 1,0, 1.0, (.5, .5, .5))]
 
 ENV = [   # туман/небо/земля/свет по сезонам
     dict(fog=(.93, .95, .96), sky=(.70, .84, 1.0), ground=(.50, .76, .42), amb=(.54, .54, .57), dif=(.50, .47, .46), dens=.0075),
@@ -489,8 +760,10 @@ def door_frame(axis, c, cen, w, y0, hgt, tt=.4):
 # Мир игрока
 # ----------------------------------------------------------------------------
 class World:
-    def __init__(self, season, food):
+    def __init__(self, season, food, layout=None):
         self.season, self.food = season, food
+        self.layout = sanitize_layout(layout)
+        self.furn_anchors = {}
         self.env, self.pal = ENV[season], PAL[season]
         self.rng = random.Random(season * 31 + food * 7 + 5)
         self.anchors = {}
@@ -905,8 +1178,8 @@ class World:
                     self._pic(c, y, mid, ry, w, w * .72, tex)
                 placed += 1
 
-    def _sofa(self, x, z, ry, w, col, cush):
-        push(x, 0, z, ry=ry)
+    def _sofa(self, x, z, ry, w, col, cush, y0=0.0):
+        push(x, y0, z, ry=ry)
         bx(0, .07, 0, w, .42, .95, col)
         bx(0, .45, -.38, w, .6, .22, col)
         for sg in (-1, 1):
@@ -940,6 +1213,179 @@ class World:
             a = k * TAU / 5
             obj("sphere", x + math.cos(a) * .18 * sc, y0 + .65 * sc + .12 * (k % 2), z + math.sin(a) * .18 * sc,
                 .22 * sc, .3 * sc, .22 * sc, (col[0], col[1] + .05 * k, col[2]))
+
+    def _bookcase(self, x, z, ry, y0=0.0):
+        rng = self.rng
+        push(x, y0, z, ry=ry)
+        bx(0, 0, -.15, 1.7, 2.05, .04, DWOOD)
+        for sg in (-1, 1):
+            bx(sg * .85, 0, 0, .05, 2.05, .38, WOOD)
+        for k in range(5):
+            bx(0, k * .5, 0, 1.7, .05, .38, WOOD)
+        for k in range(4):
+            xx = -.75
+            while xx < .7:
+                bw = rng.uniform(.05, .1)
+                bx(xx + bw / 2, k * .5 + .05, 0, bw, rng.uniform(.3, .42), .24,
+                   rng.choice([(.8, .2, .2), (.2, .4, .8), (.9, .75, .2), (.3, .6, .35), (.6, .3, .7), (.9, .9, .85)]))
+                xx += bw + .01
+        pop()
+
+    def _block(self, x, z, ry, hx, hz, r, lvl):
+        self.cline(x, z, ry, hx, r, lvl, "x")
+        if hz > r * 1.2:
+            self.cline(x, z, ry, hz, r, lvl, "z")
+
+    def _anchor(self, key, x, z, ry, lx, lz, lvl):
+        ax, az = _rot(x, z, ry, lx, lz)
+        self.furn_anchors[key] = (ax, az, lvl)
+
+    def _plush(self):
+        obj("sphere", .15, .9, .5, .2, .19, .2, K_HEAD)
+        for sg in (-1, 1):
+            obj("sphere", .32, .95, .5 + sg * .08, .05, .06, .05, WHITE, lit=False)
+            obj("sphere", .36, .94, .5 + sg * .08, .02, .03, .02, BLACK, lit=False)
+            for k in range(3):
+                beam((.15, .9 + (k - 1) * .04, .5 + sg * .18),
+                     (.15, .9 + (k - 1) * .13, .5 + sg * (.33 + .02 * k)), .035, K_GILL)
+
+    def _place_furniture(self):
+        """Вся мебель дома стоит там, куда её поставили на плане."""
+        P = self.pal
+        cush = tuple(min(1.0, c + .22) for c in P["sofa"])
+        for it in self.layout:
+            if not it.get("placed"):
+                continue
+            x, z, ry, lvl = it["x"], it["z"], it["ry"], it["lvl"]
+            y0 = F1 if lvl else 0.0
+            kind = it["id"]
+            if kind == "sofa":
+                rx, rz = _rot(x, z, ry, 0, 2.1)
+                push(rx, y0, rz, ry=ry)
+                bx(0, .075, 0, 4.4, .02, 3.2, P["rug"])
+                pop()
+                self._sofa(x, z, ry, 3.2, P["sofa"], cush, y0)
+                self._block(x, z, ry, 1.35, .35, .32, lvl)
+                self._anchor("sofa", x, z, ry, 0, 1.9, lvl)
+            elif kind == "chair":
+                self._sofa(x, z, ry, 1.3, (.12, .12, .14), (.2, .2, .24), y0)
+                self._block(x, z, ry, .45, .3, .28, lvl)
+            elif kind == "table":
+                obj("cyl", x, y0 + .075, z, .85, .06, .85, WOOD)
+                obj("cyl", x, y0, z, .1, .45, .1, DWOOD)
+                obj("cyl", x, y0 + .43, z, .88, .05, .88, WOOD)
+                self.C(x, z, .75, lvl)
+            elif kind == "lamp":
+                self._lamp(x, y0 + .075, z)
+                self.C(x, z, .3, lvl)
+            elif kind == "plant":
+                self._plant(x, y0 + .075, z)
+                self.C(x, z, .35, lvl)
+            elif kind == "kplant":
+                self._plant(x, y0 + .075, z, 1.5, (.55, .62, .2))
+                self.C(x, z, .45, lvl)
+            elif kind == "bush":
+                self._plant(x, y0 + .075, z, 1.3)
+                self.C(x, z, .4, lvl)
+            elif kind == "shelf":
+                self._bookcase(x, z, ry, y0)
+                self._block(x, z, ry, .75, .18, .26, lvl)
+                self._anchor("shelf", x, z, ry, 0, 0.95, lvl)
+            elif kind == "chest":
+                push(x, y0, z, ry=ry)
+                bx(0, .075, 0, .55, .5, .55, (.55, .05, .06))
+                pop()
+                self.C(x, z, .32, lvl)
+            elif kind == "counter":
+                push(x, y0, z, ry=ry)
+                bx(0, .075, 0, 4.6, .95, .62, (.82, .84, .88))
+                bx(0, 1.02, 0, 4.7, .06, .68, (.94, .94, .96))
+                bx(0, .075, 0, .02, .95, .64, (.5, .52, .56))
+                bx(-1.6, 1.08, -.05, .4, .22, .32, (.08, .08, .1))
+                bx(-.8, 1.08, -.05, .32, .18, .32, (.08, .08, .1))
+                obj("cyl", 1.3, 1.08, 0, .32, .06, .32, (.6, .62, .66))
+                obj("cyl", 1.3, 1.14, -.2, .03, .32, .03, (.8, .8, .85))
+                pop()
+                self._block(x, z, ry, 2.15, .25, .3, lvl)
+                self._anchor("kitchen", x, z, ry, 0, 1.35, lvl)
+            elif kind == "dine":
+                self._table(x, y0, z, ry, 2.2, 1.15, .78, WOOD)
+                push(x, y0, z, ry=ry)
+                self._food(0, .8, 0)
+                pop()
+                self._block(x, z, ry, .9, .4, .32, lvl)
+                self._anchor("food", x, z, ry, 0, 0, lvl)
+            elif kind in ("seat_a", "seat_b", "seat_c", "seat_d", "dchair"):
+                self._chair(x, z, ry, y0)
+                self.C(x, z, .22, lvl)
+            elif kind == "bed":
+                push(x, y0, z, ry=ry)
+                bx(0, .12, 0, 1.7, .32, 2.45, (.1, .1, .12))
+                bx(0, .42, 0, 1.58, .22, 2.3, (.96, .96, .98))
+                bx(0, .54, .4, 1.6, .1, 1.5, P["bed"])
+                bx(0, .64, -.9, .75, .14, .45, WHITE)
+                for k in range(8):
+                    bx(-.75 + k * .21, .12, -1.25, .035, 1.0, .035, (.08, .08, .1))
+                    bx(-.75 + k * .21, .12, 1.22, .035, .52, .035, (.08, .08, .1))
+                bx(0, 1.05, -1.25, 1.7, .05, .05, (.08, .08, .1))
+                bx(0, .64, 1.22, 1.7, .05, .05, (.08, .08, .1))
+                self._plush()
+                pop()
+                self._block(x, z, ry, .7, 1.05, .32, lvl)
+                self._anchor("bed", x, z, ry, 0, -1.7, lvl)
+            elif kind == "night":
+                push(x, y0, z, ry=ry)
+                bx(0, 0, 0, .55, .55, .5, WOOD)
+                obj("cyl", 0, .55, 0, .09, .24, .09, (1.0, .95, .75), lit=False)
+                pop()
+                self.C(x, z, .28, lvl)
+            elif kind == "wardrobe":
+                push(x, y0, z, ry=ry)
+                bx(0, 0, 0, 1.6, 2.3, .7, WOOD)
+                bx(0, .1, .36, .02, 2.1, .02, DWOOD)
+                for sg in (-1, 1):
+                    obj("sphere", sg * .08, 1.15, .38, .035, .035, .035, (.9, .8, .3))
+                pop()
+                self._block(x, z, ry, .7, .25, .28, lvl)
+            elif kind == "desk":
+                self._table(x, y0, z, ry, 1.7, .65, .78, WOOD)
+                push(x, y0, z, ry=ry)
+                bx(-.4, .78, .05, .42, .03, .32, (.95, .95, .9))
+                obj("cyl", .7, .78, .05, .1, .26, .1, (1.0, .95, .75), lit=False)
+                pop()
+                self._block(x, z, ry, .7, .22, .26, lvl)
+            elif kind == "bath":
+                push(x, y0, z, ry=ry)
+                bx(-.2, 0, 0, .06, 2.15, 1.8, (.4, .8, .66), "noise")
+                bx(.1, 0, 0, .5, .32, .55, (.15, .55, .9))
+                pop()
+                self._block(x, z, ry, .25, .8, .28, lvl)
+            elif kind == "toilet":
+                push(x, y0, z, ry=ry)
+                bx(0, 0, -.15, .58, .42, .45, WHITE)
+                bx(0, .42, .12, .5, .55, .28, WHITE)
+                pop()
+                self.C(x, z, .32, lvl)
+            elif kind == "sink":
+                obj("cyl", x, y0, z, .14, .7, .14, WHITE)
+                obj("sphere", x, y0 + .85, z, .4, .17, .34, WHITE)
+                self.C(x, z, .4, lvl)
+            elif kind == "lcounter":
+                rng = self.rng
+                push(x, y0, z, ry=ry)
+                bx(0, 0, 0, 4.2, .95, .62, (.82, .84, .88))
+                bx(0, .95, 0, 4.3, .06, .68, (.94, .94, .96))
+                for k in range(4):
+                    bx(-1.7 + k * .7, 1.02, .05, .28, .32, .16, rng.choice([(.9, .2, .5), (.9, .8, .2), (.3, .3, .8)]))
+                pop()
+                self._block(x, z, ry, 1.9, .24, .28, lvl)
+            elif kind == "washer":
+                push(x, y0, z, ry=ry)
+                bx(0, 0, 0, .8, 1.0, .8, WHITE)
+                obj("cyl", -.45, .52, 0, .28, .04, .28, (.2, .2, .26), rz=90)
+                pop()
+                self.C(x, z, .4, lvl)
+                self._anchor("laundry", x, z, ry, 0, -1.1, lvl)
 
     def _lamp(self, x, y0, z, shade=(1.0, .62, .72)):
         obj("cyl", x, y0, z, .18, .06, .18, DWOOD)
@@ -988,10 +1434,9 @@ class World:
             obj("sphere", x + .05, y + .31, z, .018, .028, .018, (1.0, .9, .3), lit=False)
 
     def _interior(self):
-        P, rng = self.pal, self.rng
+        P = self.pal
         U = F1
         ic = P["inner"]
-        cush = tuple(min(1.0, c + .22) for c in P["sofa"])
         # -- полы 1 этажа
         flat(-HW, SX0, -HD, HD, .075, 1, P["floor"], "hfloor", (.5, .5), 2.0)
         flat(SX0, HW, SZ0, HD, .075, 1, P["floor"], "hfloor", (.5, .5), 2.0)
@@ -1020,122 +1465,13 @@ class World:
             yy = .075 + (SZ0 - zz) / L * (F1 - .075)
             bx(SX0 + .05, yy, zz, .04, .95, .04, (.12, .12, .14))
         beam((SX0 + .05, 1.05, SZ0 - .2), (SX0 + .05, 1.05 + F1 - .075 - .1, SZ1 + .2), .08, (.2, .15, .12))
-        # -- гостиная
-        sofa = (-4.2, -5.5)
-        bx(sofa[0], .075, -3.4, 4.4, .02, 3.2, P["rug"])
-        self._sofa(sofa[0], sofa[1], 0, 3.2, P["sofa"], cush)
-        self.cline(sofa[0], sofa[1], 0, 1.4, .4, 0)
-        obj("cyl", sofa[0], .075, -3.5, .85, .06, .85, WOOD)
-        obj("cyl", sofa[0], .0, -3.5, .1, .45, .1, DWOOD)
-        obj("cyl", sofa[0], .43, -3.5, .88, .05, .88, WOOD)
-        self.C(sofa[0], -3.5, .75, 0)
-        self._sofa(-7.6, 1.0, 90, 1.3, (.12, .12, .14), (.2, .2, .24))
-        self.C(-7.6, 1.0, .6, 0)
-        bx(-7.5, .075, -3.0, .55, .5, .55, (.55, .05, .06))
-        self._lamp(-1.4, .075, -6.2)
-        self.C(-1.4, -6.2, .3, 0)
-        self._plant(-7.9, .075, -6.5)
-        self.C(-7.9, -6.5, .35, 0)
-        self._plant(.15, .075, 6.3, 1.3)
-        self.C(.15, 6.3, .35, 0)
-        # книжный шкаф у перегородки, в стороне от арки
-        push(AX - .42, 0, -5.6, ry=-90)
-        bx(0, 0, -.15, 1.7, 2.05, .04, DWOOD)
-        for sg in (-1, 1):
-            bx(sg * .85, 0, 0, .05, 2.05, .38, WOOD)
-        for k in range(5):
-            bx(0, k * .5, 0, 1.7, .05, .38, WOOD)
-        for k in range(4):
-            xx = -.75
-            while xx < .7:
-                bw = rng.uniform(.05, .1)
-                bx(xx + bw / 2, k * .5 + .05, 0, bw, rng.uniform(.3, .42), .24,
-                   rng.choice([(.8, .2, .2), (.2, .4, .8), (.9, .75, .2), (.3, .6, .35), (.6, .3, .7), (.9, .9, .85)]))
-                xx += bw + .01
-        pop()
-        self.cline(AX - .25, -5.6, 0, .85, .35, 0, "z")
-        # -- кухня-столовая: стол стоит в глубине, проход через арку свободен
-        kx, kz = 3.7, -6.85
-        bx(kx, .075, kz, 4.6, .95, .62, (.82, .84, .88))
-        bx(kx, 1.02, kz, 4.7, .06, .68, (.94, .94, .96))
-        bx(kx, .075, kz, .02, .95, .64, (.5, .52, .56))
-        bx(kx - 1.6, 1.08, kz - .05, .4, .22, .32, (.08, .08, .1))
-        bx(kx - .8, 1.08, kz - .05, .32, .18, .32, (.08, .08, .1))
-        obj("cyl", kx + 1.3, 1.08, kz, .32, .06, .32, (.6, .62, .66))
-        obj("cyl", kx + 1.3, 1.14, kz - .2, .03, .32, .03, (.8, .8, .85))
-        self.cline(kx, kz, 0, 2.2, .4, 0)
-        self._plant(5.7, .075, -5.5, 1.5, (.55, .62, .2))
-        self.C(5.7, -5.5, .35, 0)
-        self._table(3.7, 0, 2.3, 0, 2.2, 1.15, .78, WOOD)
-        self.cline(3.7, 2.3, 0, .85, .45, 0)
-        for cx in (2.9, 4.5):
-            self._chair(cx, 1.4, 0)
-            self._chair(cx, 3.2, 180)
-        for k, (px_, pz_) in enumerate(((3.0, 2.1), (4.4, 2.5), (3.7, 2.3))):
-            if k < 2:
-                obj("cyl", px_, .8, pz_, .17, .015, .17, WHITE)
-                obj("cyl", px_ - .04, .815, pz_ + .03, .03, .02, .03, (.15, .3, .15))
-        self._food(3.7, .8, 2.3)
+        self._place_furniture()
         self._pendant(3.7, H0, 2.3)
-        # -- спальня
-        push(-7.35, U, 1.5, ry=-90)                                                       # кровать, изголовье к западной стене
-        bx(0, .12, 0, 1.7, .32, 2.45, (.1, .1, .12))
-        bx(0, .42, 0, 1.58, .22, 2.3, (.96, .96, .98))
-        bx(0, .54, .4, 1.6, .1, 1.5, P["bed"])
-        bx(0, .64, -.9, .75, .14, .45, WHITE)
-        for k in range(8):
-            bx(-.75 + k * .21, .12, -1.25, .035, 1.0, .035, (.08, .08, .1))
-            bx(-.75 + k * .21, .12, 1.22, .035, .52, .035, (.08, .08, .1))
-        bx(0, 1.05, -1.25, 1.7, .05, .05, (.08, .08, .1))
-        bx(0, .64, 1.22, 1.7, .05, .05, (.08, .08, .1))
-        pop()
-        self.cline(-7.35, 1.5, -90, 1.1, .4, 1, "z")
-        bx(-8.15, U, .15, .55, .55, .5, WOOD)
-        obj("cyl", -8.15, U + .55, .15, .09, .24, .09, (1.0, .95, .75), lit=False)
-        push(-1.8, U, -3.15, ry=0)                                                        # шкаф, не перекрывает дверь
-        bx(0, 0, 0, 1.6, 2.3, .7, WOOD)
-        bx(0, .1, .36, .02, 2.1, .02, DWOOD)
-        for sg in (-1, 1):
-            obj("sphere", sg * .08, 1.15, .38, .035, .035, .035, (.9, .8, .3))
-        pop()
-        self.cline(-1.8, -3.15, 0, .7, .4, 1)
-        obj("cyl", -4.6, U + .01, 3.2, 1.45, .015, 1.45, P["rug"])
-        self._table(-4.4, U, 6.45, 0, 1.7, .65, .78, WOOD)
-        self._chair(-4.4, 5.6, 180, U)
-        self.cline(-4.4, 6.45, 0, .75, .4, 1)
-        bx(-4.8, U + .78, 6.5, .42, .03, .32, (.95, .95, .9))
-        obj("cyl", -3.7, U + .78, 6.5, .1, .26, .1, (1.0, .95, .75), lit=False)
-        # плюшевый Кинито на подушке
-        px, py, pz = -8.05, U + .78, 1.7
-        obj("sphere", px, py + .12, pz, .2, .19, .2, K_HEAD)
-        for sg in (-1, 1):
-            obj("sphere", px + .17, py + .17, pz + sg * .08, .05, .06, .05, WHITE, lit=False)
-            obj("sphere", px + .21, py + .16, pz + sg * .08, .02, .03, .02, BLACK, lit=False)
-            for k in range(3):
-                beam((px, py + .12 + (k - 1) * .04, pz + sg * .18),
-                     (px, py + .12 + (k - 1) * .13, pz + sg * (.33 + .02 * k)), .035, K_GILL)
-        # -- ванная
-        obj("cyl", 4.6, U, .85, .14, .7, .14, WHITE)
-        obj("sphere", 4.6, U + .85, .85, .4, .17, .34, WHITE)
+        # зеркало остаётся на стене ванной
         bx(4.6, U + 1.35, LZ - .16, 1.15, 1.15, .03, (.4, .45, .5))
         bx(4.6, U + 1.32, LZ - .12, 1.22, 1.22, .02, (.5, .34, .2))
         self.mirror = (WX + 4.6, WZ + LZ - .22, U + 1.9)
-        self.C(4.6, .85, .5, 1)
-        bx(1.3, U, -.2, .58, .42, .72, WHITE)
-        bx(1.3, U + .42, .1, .58, .55, .26, WHITE)
-        self.C(1.3, -.2, .45, 1)
-        bx(.55, U, -2.5, .06, 2.15, 1.8, (.4, .8, .66), "noise")
-        bx(.85, U, -2.5, .55, .32, .55, (.15, .55, .9))
-        self.C(.6, -2.5, .55, 1)
-        # -- прачечная
-        bx(3.3, U, 6.85, 4.2, .95, .62, (.82, .84, .88))
-        bx(3.3, U + .95, 6.85, 4.3, .06, .68, (.94, .94, .96))
-        for k in range(4):
-            bx(1.6 + k * .7, U + 1.02, 6.9, .28, .32, .16, rng.choice([(.9, .2, .5), (.9, .8, .2), (.3, .3, .8)]))
-        self.cline(3.3, 6.85, 0, 2.0, .4, 1)
-        bx(5.5, U, 3.7, .8, 1.0, .8, WHITE)
-        obj("cyl", 5.05, U + .52, 3.7, .28, .04, .28, (.2, .2, .26), rz=90)
-        self.C(5.5, 3.7, .55, 1)
+        obj("cyl", -4.6, U + .01, 3.2, 1.45, .015, 1.45, P["rug"])
         bx(1.7, U, 3.4, .65, .48, .65, (.15, .55, .9))
         # -- люстры 2 этажа
         self._pendant(-4.8, H1, 1.6)
@@ -1158,11 +1494,15 @@ class World:
         self._hang("z", -HW + ins, U + 1.9, BZ + 1.0, HD - 1.1, [(2.6, 1.6)], 90, 1, 3)
         self._hang("x", BZ + ins, U + 1.9, -HW + 1.1, RX - .7, [(BED_DX, 1.4)], 0, 2, 4)
         self._hang("x", BZ - ins, U + 1.9, -HW + 1.1, SX0 - 1.0, [(BED_DX, 1.4), (BATH_DX, 1.4)], 180, 3, 0)
+        fa = self.furn_anchors
         self.anchors = {
-            "sofa": (-4.2, -3.6), "food": (3.7, 2.3), "shelf": (AX - .9, -5.6),
-            "pics": (-6.4, -6.4), "kitchen": (3.7, -5.4), "stairs": (5.3, 6.7),
-            "bed": (-5.6, 1.5), "pic5": (-4.2, -3.2), "mirror": (4.6, .2),
-            "laundry": (3.3, 5.2), "window": (-7.6, 2.6), "window2": (-5.2, -6.5),
+            "sofa": fa.get("sofa", (-4.2, -3.6, 0)),
+            "food": fa.get("food", (3.7, 2.3, 0)),
+            "shelf": fa.get("shelf", (AX - .9, -5.6, 0)),
+            "pics": (-6.4, -6.4), "kitchen": fa.get("kitchen", (3.7, -5.4, 0)),
+            "stairs": (5.3, 6.7), "bed": fa.get("bed", (-5.6, 1.5, 1)),
+            "pic5": (-4.2, -3.2), "mirror": (4.6, .2),
+            "laundry": fa.get("laundry", (5.5, 2.6, 1)), "window": (-7.6, 2.6), "window2": (-5.2, -6.5),
         }
         # -- стены/полы: периметр и перегородки (коллайдеры)
 
@@ -1346,12 +1686,12 @@ def spot_lines(world):
     se, fo = world.season, world.food
     sa, sn, fn = SEASON_ACC[se], SEASON_NOM[se], FOOD_LOW[fo]
     L = {
-        "sofa": ["Ты любишь сидеть здесь. Я смотрю, как ты сидишь.", "Диван синий. Ты ведь любишь синий?"],
+        "sofa": ["Ты поставил диван именно сюда. Я запомнил.", "Садись. Я посижу рядом. Я всегда рядом."],
         "food": ["На столе - твоя любимая еда: %s. Я запомнил." % fn, "Она никогда не остывает. Попробуй. Я подожду."],
         "shelf": ["Книги о тебе. Я прочитал все. Дважды.", "Хочешь, расскажу, что на последней странице?"],
         "pics": ["Это твои рисунки с прошлых уровней. Я сохранил все.", "Вот этот лучший: ты нарисовал меня красивым!"],
         "window": ["Ты любишь %s. Поэтому за окном всегда %s." % (sa, sn), "Всегда. Другой погоды больше не будет."],
-        "kitchen": ["Мебель стоит так, как ты расставил её в Ready Repair.", "Я ничего не менял. Почти ничего."],
+        "kitchen": ["Ты расставил весь дом сам. Я только смотрел.", "Я ничего не менял. Почти ничего."],
         "stairs": ["Наверху твоя спальня. Я заправил кровать.", "Поднимайся. Я никуда не тороплюсь."],
         "bed": ["Здесь тебе будет уютно. Оставайся навсегда.", "Плюшевый Кинито уже ждёт тебя. Это я, только маленький."],
         "pic5": ["Здесь мы вдвоём. Я нарисовал себя побольше.", "Ведь я всегда рядом. Всегда."],
@@ -1371,6 +1711,13 @@ def add_spots(world):
             ("bed", 2.4, 1, "Кровать", "bed"), ("pic5", 2.0, 1, "Рисунок", "pic5"),
             ("mirror", 2.0, 1, "Зеркало", "mirror"), ("laundry", 2.0, 1, "Стиральная машина", "laundry"),
             ("window", 2.0, 1, "Окно", "window"), ("window2", 2.0, 0, "Окно", "window"))
+    movable = {"sofa", "food", "shelf", "kitchen", "bed", "laundry"}
     for key, r, lvl, lab, lk in spec:
-        x, z = a[key]
+        if key in movable and key not in world.furn_anchors:
+            continue
+        pos = a[key]
+        if len(pos) == 3:
+            x, z, lvl = pos
+        else:
+            x, z = pos
         world.spot(x, z, r, lvl, lk, lab, L[lk])

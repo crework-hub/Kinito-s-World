@@ -1012,8 +1012,9 @@ class Game:
         # «Твой мир»: пространство за шестиугольной дырой; зависит от ответов на вопросы Кинито в начале игры
         self.world = None
         self.inw = False            # игрок сейчас в «Твоём мире»
-        self.quiz = None            # опрос и рисовалка в начале: dict(phase, step, season, food)
+        self.quiz = None            # опрос, рисовалка и расстановка мебели: dict(phase, step, season, food)
         self.paint = None
+        self.furnish = None
         self.answers = None         # (сезон, еда)
         self.wflash = 0.0           # белая вспышка
         self.wtrans = None          # возврат в парк: dict(t, to, done)
@@ -1089,7 +1090,10 @@ class Game:
                 self.gy = float(args[args.index("--gy") + 1])
         if "--wride" in args:                              # тест: сразу в поездку над лесом
             self.enter_world(ride=True)
-        if "--paint" in args:
+        if "--furnish" in args:
+            self.quiz = dict(phase="furnish", step=2, season=1, food=0)
+            self.begin_furnish()
+        elif "--paint" in args:
             self.quiz = dict(phase="paint", step=2, season=1, food=0)
             self.begin_drawing(0)
         elif "--quiz" in args:
@@ -1408,9 +1412,9 @@ class Game:
             self.say(msg)
 
     # --- «Твой мир»: опрос Кинито в начале игры, переход через шестиугольную дыру и возврат
-    def set_answers(self, season, food):
+    def set_answers(self, season, food, layout=None):
         self.answers = (season, food)
-        self.world = YW.World(season, food)
+        self.world = YW.World(season, food, layout)
         YW.add_spots(self.world)
 
     def quiz_pick(self, n):
@@ -1502,13 +1506,17 @@ class Game:
             self.quiz = dict(phase="paint", step=2, season=int(season), food=int(food))
             self.begin_drawing(done)
             return
-        self.set_answers(int(season), int(food))
+        if not data.get("furniture_done"):
+            self.quiz = dict(phase="furnish", step=2, season=int(season), food=int(food))
+            self.begin_furnish()
+            return
+        self.set_answers(int(season), int(food), data.get("furniture"))
         self.quiz = None
         self.park_t0 = self.t
 
     def begin_drawing(self, index):
         if index >= len(DRAW_PROMPTS):
-            self.finish_intro()
+            self.begin_furnish()
             return
         surf = pygame.Surface((192, 120))
         surf.fill((255, 255, 255))
@@ -1524,14 +1532,28 @@ class Game:
         pygame.mouse.set_visible(False)
         pygame.mouse.get_rel()
 
+    def begin_furnish(self):
+        items = [dict(it) for it in YW.empty_layout()]
+        self.furnish = dict(items=items, drag=None, sel=None, warn="", floor=0,
+                            zoom=1.0, pan_x=0.0, pan_y=0.0, pan_drag=None)
+        if self.quiz is None:
+            self.quiz = dict(phase="furnish", step=2, season=1, food=0)
+        self.quiz["phase"] = "furnish"
+        self.paint = None
+        pygame.event.set_grab(False)
+        pygame.mouse.set_visible(False)
+        pygame.mouse.get_rel()
+
     def finish_intro(self):
         qz = self.quiz
         season = qz["season"] if qz and qz.get("season") is not None else 1
         food = qz["food"] if qz and qz.get("food") is not None else 0
+        layout = [dict(it) for it in self.furnish["items"]] if self.furnish else None
         self.apply_saved_drawings()
-        self.set_answers(int(season), int(food))
+        self.set_answers(int(season), int(food), layout)
         self.quiz = None
         self.paint = None
+        self.furnish = None
         self.park_t0 = self.t
         pygame.event.set_grab(True)
         pygame.mouse.set_visible(False)
@@ -1724,6 +1746,384 @@ class Game:
         self.begin_drawing(i + 1)
         if self.paint and i + 1 < len(DRAW_PROMPTS):
             self.paint["react"] = DRAW_PROMPTS[i][1]
+
+    def furnish_geom(self):
+        f = self.furnish
+        x0, z0, x1, z1 = -9.2, -7.85, 9.2, 7.85
+        rw, rh = x1 - x0, z1 - z0
+        top, tray_h = 40, 108
+        area_h = WIN_H - top - tray_h
+        base = min((WIN_W - 12) / rw, (area_h - 6) / rh)
+        scale = base * f["zoom"]
+        dw, dh = rw * scale, rh * scale
+        fl = dict(lvl=f["floor"], ox=(WIN_W - dw) / 2 + f["pan_x"], oy=top + (area_h - dh) / 2 + f["pan_y"],
+                  scale=scale, dw=dw, dh=dh, x0=x0, z0=z0, view=(0, top, WIN_W, area_h))
+        return dict(floor=fl, tray=(0, WIN_H - tray_h, WIN_W, tray_h), top=top, tray_h=tray_h)
+
+    def furnish_w2s(self, x, z, fl):
+        return fl["ox"] + (x - fl["x0"]) * fl["scale"], fl["oy"] + (z - fl["z0"]) * fl["scale"]
+
+    def furnish_s2w(self, sx, sy, fl):
+        return fl["x0"] + (sx - fl["ox"]) / fl["scale"], fl["z0"] + (sy - fl["oy"]) / fl["scale"]
+
+    def _floor_at(self, pos, g):
+        x, y, w, h = g["floor"]["view"]
+        if x <= pos[0] <= x + w and y <= pos[1] <= y + h:
+            return g["floor"]
+        return None
+
+    def _tray_slots(self, g):
+        dragging = self.furnish["drag"]["id"] if self.furnish.get("drag") else None
+        items = [it for it in self.furnish["items"] if not it.get("placed") and it["id"] != dragging]
+        cols = 13
+        tw = WIN_W / cols
+        th = 50
+        ox, oy = 0, g["tray"][1] + 4
+        slots = []
+        for i, it in enumerate(items):
+            c, r = i % cols, i // cols
+            slots.append((it, pygame.Rect(ox + c * tw + 2, oy + r * th, tw - 4, th - 4)))
+        return slots
+
+    def _tray_hit(self, pos, g):
+        for it, rect in self._tray_slots(g):
+            if rect.collidepoint(pos):
+                return it
+        return None
+
+    def _hit_floor_btn(self, pos):
+        if pygame.Rect(8, 8, 78, 24).collidepoint(pos):
+            return 0
+        if pygame.Rect(90, 8, 78, 24).collidepoint(pos):
+            return 1
+        return None
+
+    def _hit_default(self, pos):
+        return pygame.Rect(WIN_W - 252, 8, 128, 24).collidepoint(pos)
+
+    def _furnish_hit(self, pos, g):
+        fl = self._floor_at(pos, g)
+        if not fl:
+            return None
+        x, z = self.furnish_s2w(pos[0], pos[1], fl)
+        best, best_d = None, 1e9
+        for it in self.furnish["items"]:
+            if not it.get("placed") or it["lvl"] != fl["lvl"]:
+                continue
+            spec = YW.piece_of(it["id"])
+            th = math.radians(it["ry"])
+            co, si = math.cos(th), math.sin(th)
+            dx, dz = x - it["x"], z - it["z"]
+            lx, lz = co * dx - si * dz, si * dx + co * dz
+            inside = abs(lx) <= spec["w"] / 2 and abs(lz) <= spec["d"] / 2
+            dist = math.hypot(dx, dz) * fl["scale"]
+            if (inside or dist < 16) and dist < best_d:
+                best, best_d = it, dist
+        return best
+
+    def furnish_zoom(self, direction, pos):
+        f = self.furnish
+        if not f or not direction:
+            return
+        g = self.furnish_geom()
+        over = self._floor_at(pos, g)
+        wx = wz = None
+        if over:
+            wx, wz = self.furnish_s2w(pos[0], pos[1], g["floor"])
+        f["zoom"] = clamp(f["zoom"] * (1.12 if direction > 0 else 1 / 1.12), 1.0, 3.4)
+        if f["zoom"] <= 1.02:
+            f["zoom"], f["pan_x"], f["pan_y"] = 1.0, 0.0, 0.0
+            return
+        if wx is None:
+            return
+        x0, z0, x1, z1 = -9.2, -7.85, 9.2, 7.85
+        rw, rh = x1 - x0, z1 - z0
+        top, tray_h = 40, 108
+        area_h = WIN_H - top - tray_h
+        scale = min((WIN_W - 12) / rw, (area_h - 6) / rh) * f["zoom"]
+        dw, dh = rw * scale, rh * scale
+        f["pan_x"] = pos[0] - (wx - x0) * scale - (WIN_W - dw) / 2
+        f["pan_y"] = pos[1] - (wz - z0) * scale - (top + (area_h - dh) / 2)
+
+    def _set_furn_floor(self, lvl):
+        f = self.furnish
+        f["floor"] = lvl
+        f["zoom"], f["pan_x"], f["pan_y"] = 1.0, 0.0, 0.0
+
+    def furnish_pointer(self, pos, kind):
+        f = self.furnish
+        if not f:
+            return
+        g = self.furnish_geom()
+        if kind == "down":
+            if self._hit_done(pos, g):
+                self.furnish_finish()
+                return
+            if self._hit_default(pos):
+                f["items"] = [dict(it) for it in YW.default_layout()]
+                f["drag"] = None
+                f["sel"] = None
+                f["warn"] = ""
+                self._set_furn_floor(0)
+                self.audio.play("chime", .6)
+                return
+            floor = self._hit_floor_btn(pos)
+            if floor is not None:
+                self._set_furn_floor(floor)
+                self.audio.play("tick", .45)
+                return
+            tray = self._tray_hit(pos, g)
+            if tray:
+                f["sel"] = tray["id"]
+                f["drag"] = dict(id=tray["id"], x0=tray["x"], z0=tray["z"], lvl0=tray["lvl"],
+                                 placed0=False, gx=0.0, gz=0.0)
+                f["pan_drag"] = None
+                self.audio.play("tick", .35)
+                return
+            hit = self._furnish_hit(pos, g)
+            fl = self._floor_at(pos, g)
+            if fl and f.get("sel") and not hit:
+                chosen = next((i for i in f["items"] if i["id"] == f["sel"]), None)
+                if chosen and not chosen.get("placed"):
+                    wx, wz = self.furnish_s2w(pos[0], pos[1], fl)
+                    chosen["placed"] = True
+                    chosen["lvl"] = fl["lvl"]
+                    chosen["x"], chosen["z"] = wx, wz
+                    f["drag"] = dict(id=chosen["id"], x0=0.0, z0=0.0, lvl0=0, placed0=False, gx=0.0, gz=0.0)
+                    return
+            if hit and fl:
+                wx, wz = self.furnish_s2w(pos[0], pos[1], fl)
+                f["sel"] = hit["id"]
+                f["drag"] = dict(id=hit["id"], x0=hit["x"], z0=hit["z"], lvl0=hit["lvl"],
+                                 placed0=True, gx=hit["x"] - wx, gz=hit["z"] - wz)
+                f["pan_drag"] = None
+                self.audio.play("tick", .35)
+                return
+            if fl and f["zoom"] > 1.02:
+                f["pan_drag"] = (pos[0], pos[1], f["pan_x"], f["pan_y"])
+                f["sel"] = None
+        elif kind == "move" and f.get("pan_drag"):
+            x0, y0, px, py = f["pan_drag"]
+            f["pan_x"] = px + pos[0] - x0
+            f["pan_y"] = py + pos[1] - y0
+        elif kind == "move" and f["drag"]:
+            it = next(i for i in f["items"] if i["id"] == f["drag"]["id"])
+            fl = self._floor_at(pos, g)
+            over_tray = pygame.Rect(*g["tray"]).collidepoint(pos)
+            if fl and not over_tray:
+                wx, wz = self.furnish_s2w(pos[0], pos[1], fl)
+                it["placed"] = True
+                it["lvl"] = fl["lvl"]
+                it["x"] = wx + f["drag"]["gx"]
+                it["z"] = wz + f["drag"]["gz"]
+            else:
+                it["placed"] = False
+        elif kind == "up":
+            f["pan_drag"] = None
+            if not f["drag"]:
+                return
+            it = next(i for i in f["items"] if i["id"] == f["drag"]["id"])
+            if not it.get("placed"):
+                f["warn"] = ""
+            elif YW.layout_ok(f["items"]):
+                f["warn"] = ""
+            else:
+                d = f["drag"]
+                it["x"], it["z"], it["lvl"], it["placed"] = d["x0"], d["z0"], d["lvl0"], d["placed0"]
+                f["warn"] = "Сюда не встанет: стена, лестница или другая мебель."
+                self.audio.play("tick", .7)
+            f["drag"] = None
+
+    def furnish_rotate(self, pos=None):
+        f = self.furnish
+        if not f or f["drag"]:
+            return
+        it = self._furnish_hit(pos, self.furnish_geom()) if pos is not None else None
+        if it is None:
+            it = next((i for i in f["items"] if i["id"] == f["sel"]), None)
+        if it is None or not it.get("placed") or YW.piece_of(it["id"]).get("round"):
+            if it is not None:
+                f["sel"] = it["id"]
+            return
+        old = it["ry"]
+        it["ry"] = (int(it["ry"]) + 90) % 360
+        if YW.layout_ok(f["items"]):
+            f["sel"] = it["id"]
+            f["warn"] = ""
+            self.audio.play("tick", .55)
+        else:
+            it["ry"] = old
+            f["warn"] = "Так не поворачивается: упирается в стену или мебель."
+            self.audio.play("tick", .7)
+
+    def furnish_finish(self):
+        f = self.furnish
+        qz = self.quiz
+        if not f or not qz:
+            return
+        if not YW.layout_ok(f["items"]):
+            f["warn"] = "Сначала освободи двери и лестницу."
+            self.audio.play("tick", .7)
+            return
+        folder = profile_dir()
+        os.makedirs(folder, exist_ok=True)
+        data = self.read_profile() or {}
+        name, _ = player_name()
+        data["name"] = name
+        data["season"] = int(qz["season"] if qz.get("season") is not None else 1)
+        data["food"] = int(qz["food"] if qz.get("food") is not None else 0)
+        data["furniture_done"] = True
+        data["furniture"] = [dict(id=it["id"], x=round(float(it["x"]), 3), z=round(float(it["z"]), 3),
+                                  ry=int(it["ry"]) % 360, lvl=int(it["lvl"]), placed=True)
+                             for it in f["items"] if it.get("placed")]
+        with open(os.path.join(folder, "profile.json"), "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False)
+        self.audio.play("chime", .8)
+        self.finish_intro()
+
+    def poly(self, pts, rgba):
+        glBindTexture(GL_TEXTURE_2D, TEX["white"])
+        glColor4f(*rgba)
+        glBegin(GL_TRIANGLE_FAN)
+        for x, y in pts:
+            glVertex2f(x, y)
+        glEnd()
+
+    def loop(self, pts, rgba):
+        glBindTexture(GL_TEXTURE_2D, TEX["white"])
+        glColor4f(*rgba)
+        glLineWidth(2)
+        glBegin(GL_LINE_LOOP)
+        for x, y in pts:
+            glVertex2f(x, y)
+        glEnd()
+        glLineWidth(1)
+
+    def disk(self, x, y, r, rgba, n=18):
+        glBindTexture(GL_TEXTURE_2D, TEX["white"])
+        glColor4f(*rgba)
+        glBegin(GL_TRIANGLE_FAN)
+        glVertex2f(x, y)
+        for i in range(n + 1):
+            a = i * TAU / n
+            glVertex2f(x + math.cos(a) * r, y + math.sin(a) * r)
+        glEnd()
+
+    def _plan_rect(self, fl, x0, z0, x1, z1, rgba):
+        sx, sy = self.furnish_w2s(x0, z0, fl)
+        sx2, sy2 = self.furnish_w2s(x1, z1, fl)
+        self.rect(min(sx, sx2), min(sy, sy2), abs(sx2 - sx), abs(sy2 - sy), rgba)
+
+    def _draw_icon(self, it, fl, parts):
+        th = math.radians(it["ry"])
+        co, si = math.cos(th), math.sin(th)
+        for part in parts:
+            if part[0] == "disk":
+                _, lx, lz, rad, col = part
+                wx = it["x"] + lx * co + lz * si
+                wz = it["z"] - lx * si + lz * co
+                sx, sy = self.furnish_w2s(wx, wz, fl)
+                self.disk(sx, sy, rad * fl["scale"], (*col, 1), 14)
+                continue
+            _, lx, lz, a, b, col = part
+            hw, hd = a / 2, b / 2
+            pts = []
+            for ox, oz in ((-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)):
+                wx = it["x"] + (lx + ox) * co + (lz + oz) * si
+                wz = it["z"] - (lx + ox) * si + (lz + oz) * co
+                pts.append(self.furnish_w2s(wx, wz, fl))
+            self.poly(pts, (*col, 1))
+
+    def _draw_tray_icon(self, kind, cx, cy, pal):
+        spec = YW.piece_of(kind)
+        fit = 30.0 / max(spec["w"], spec["d"])
+        for part in YW.icon_parts(kind, pal["sofa"], pal["bed"]):
+            if part[0] == "disk":
+                _, lx, lz, rad, col = part
+                self.disk(cx + lx * fit, cy + lz * fit, max(1.6, rad * fit), (*col, 1), 12)
+                continue
+            _, lx, lz, a, b, col = part
+            hw, hd = a * fit / 2, b * fit / 2
+            x, y = cx + lx * fit, cy + lz * fit
+            self.poly([(x - hw, y - hd), (x + hw, y - hd), (x + hw, y + hd), (x - hw, y + hd)], (*col, 1))
+
+    def _draw_floor(self, fl, pal):
+        wood, kitchen = (.76, .56, .38, 1), (.84, .66, .44, 1)
+        carpet = (*pal["carpet"], 1)
+        wall = (.34, .22, .16, 1)
+        self.rect(fl["ox"], fl["oy"], fl["dw"], fl["dh"], wall)
+        if fl["lvl"] == 0:
+            self._plan_rect(fl, -8.75, -7.25, 0.78, 7.2, wood)
+            self._plan_rect(fl, 1.08, -7.25, 6.28, 7.2, kitchen)
+            self._plan_rect(fl, 6.28, 5.95, 8.55, 7.2, kitchen)
+            self._plan_rect(fl, 0.7, -1.5, 1.15, 1.5, wood)
+            self._plan_rect(fl, 6.35, -1.9, 8.7, 5.9, (.28, .2, .14, 1))
+            for i in range(6):
+                self._plan_rect(fl, 6.55, -1.6 + i * 1.15, 8.55, -1.45 + i * 1.15, (.42, .3, .2, 1))
+        else:
+            self._plan_rect(fl, -8.75, -7.25, 8.55, -4.15, wood)
+            self._plan_rect(fl, -8.75, -3.98, -0.35, 7.2, carpet)
+            self._plan_rect(fl, -0.15, -3.98, 6.35, 1.55, (.92, .93, .95, 1))
+            self._plan_rect(fl, -0.15, 1.85, 6.35, 7.2, (.86, .9, .94, 1))
+            self._plan_rect(fl, 6.55, -4.0, 8.55, -2.05, wood)
+            self._plan_rect(fl, 6.4, -2.0, 8.7, 6.0, (.22, .16, .14, 1))
+        for box in YW.WALLS[fl["lvl"]]:
+            if box[2] - box[0] > 2.2 and box[3] - box[1] > 4:
+                continue
+            self._plan_rect(fl, *box, wall)
+        if fl["lvl"] == 0:
+            self._plan_rect(fl, YW.DOOR_X - .75, 7.05, YW.DOOR_X + .75, 7.75, wood)
+
+    def hud_furnish(self):
+        W = WIN_W
+        f = self.furnish
+        g = self.furnish_geom()
+        fl = g["floor"]
+        season = self.quiz.get("season") if self.quiz and self.quiz.get("season") is not None else 1
+        pal = YW.PAL[int(season)]
+        self.rect(0, 0, W, WIN_H, (.07, .03, .16, 1))
+        self.rect(0, 0, W, 40, (.14, .07, .26, 1))
+        for lvl, label, x in ((0, "1 этаж", 8), (1, "2 этаж", 90)):
+            on = f["floor"] == lvl
+            self.rect(x, 8, 78, 24, ((.55, .32, .78, 1) if on else (.28, .16, .4, 1)))
+            self.text(label, 14, x + 39, 10, (255, 255, 255), (40, 20, 70))
+        sel = YW.piece_of(f["sel"]) if f.get("sel") else None
+        sub = f["warn"] or ("Бери снизу. Колесо — крупнее." if not sel else sel["label"] + ". R — повернуть.")
+        self.text(sub, 12, 176, 12, (255, 150, 150) if f["warn"] else (220, 200, 235), None, "left")
+        self.rect(W - 252, 8, 128, 24, (.4, .24, .55, 1))
+        self.text("По умолчанию", 13, W - 188, 11, (255, 255, 255), (30, 15, 50))
+        self.rect(W - 112, 8, 96, 24, (.55, .32, .78, 1))
+        self.text("Готово", 16, W - 64, 10, (255, 255, 255), (40, 20, 70))
+        glEnable(GL_SCISSOR_TEST)
+        glScissor(0, g["tray_h"], W, WIN_H - g["tray_h"] - g["top"])
+        self._draw_floor(fl, pal)
+        bad = f["drag"] is not None and not YW.layout_ok(f["items"])
+        placed = [it for it in f["items"] if it.get("placed") and it["lvl"] == fl["lvl"] and it["id"] != f.get("sel")]
+        placed += [it for it in f["items"] if it.get("placed") and it["lvl"] == fl["lvl"] and it["id"] == f.get("sel")]
+        for it in placed:
+            self._draw_icon(it, fl, YW.icon_parts(it["id"], pal["sofa"], pal["bed"]))
+            if it["id"] == f.get("sel"):
+                hot = bad and f["drag"] and f["drag"]["id"] == it["id"]
+                pts = [self.furnish_w2s(x, z, fl) for x, z in YW._corners(it)]
+                self.loop(pts, ((1, .3, .3, 1) if hot else (1, 1, 1, 1)))
+        glDisable(GL_SCISSOR_TEST)
+        tx, ty, tw, th = g["tray"]
+        self.rect(tx, ty, tw, th, (.1, .05, .16, 1))
+        for it, rect in self._tray_slots(g):
+            on = it["id"] == f.get("sel")
+            self.rect(rect.x, rect.y, rect.w, rect.h, ((.42, .26, .58, 1) if on else (.2, .12, .3, 1)))
+            self._draw_tray_icon(it["id"], rect.centerx, rect.centery, pal)
+        mx, my = pygame.mouse.get_pos()
+        glBindTexture(GL_TEXTURE_2D, TEX["white"])
+        glLineWidth(2)
+        for rad, col in ((8, (0, 0, 0)), (6.5, (1, 1, 1))):
+            glColor3f(*col)
+            glBegin(GL_LINE_LOOP)
+            for i in range(16):
+                a = i * TAU / 16
+                glVertex2f(mx + math.cos(a) * rad, my + math.sin(a) * rad)
+            glEnd()
+        glLineWidth(1)
 
     def enter_world(self, ride):
         """Тест/переход: оказаться в «Твоём мире» (ride=True - на горках над лесом, иначе - у посадки)."""
@@ -3294,6 +3694,8 @@ class Game:
         elif mode == "park" and self.quiz:
             if self.quiz.get("phase") == "paint":
                 self.hud_paint()
+            elif self.quiz.get("phase") == "furnish":
+                self.hud_furnish()
             else:
                 self.hud_quiz()
         elif self.show_hud and mode == "park":
@@ -3364,13 +3766,18 @@ class Game:
                 if e.type == pygame.QUIT:
                     running = False
                 elif e.type == pygame.KEYDOWN:
+                    phase = self.quiz.get("phase") if self.quiz else None
                     if e.key == pygame.K_ESCAPE:
                         running = False
-                    elif self.quiz and self.quiz.get("phase") == "paint" and e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    elif phase == "paint" and e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                         self.paint_finish()
-                    elif self.quiz and self.quiz.get("phase") != "paint" and pygame.K_1 <= e.key <= pygame.K_4:
+                    elif phase == "furnish" and e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self.furnish_finish()
+                    elif phase == "furnish" and e.key == pygame.K_r:
+                        self.furnish_rotate()
+                    elif phase == "ask" and pygame.K_1 <= e.key <= pygame.K_4:
                         self.quiz_pick(e.key - pygame.K_1)
-                    elif self.quiz and self.quiz.get("phase") != "paint" and pygame.K_KP1 <= e.key <= pygame.K_KP4:
+                    elif phase == "ask" and pygame.K_KP1 <= e.key <= pygame.K_KP4:
                         self.quiz_pick(e.key - pygame.K_KP1)
                     elif e.key == pygame.K_e:
                         self.interact()
@@ -3383,14 +3790,29 @@ class Game:
                     elif e.key == pygame.K_m:
                         self.audio.toggle_mute()
                 elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                    if self.quiz and self.quiz.get("phase") == "paint":
+                    phase = self.quiz.get("phase") if self.quiz else None
+                    if phase == "paint":
                         self.paint_pointer(e.pos, "down")
+                    elif phase == "furnish":
+                        self.furnish_pointer(e.pos, "down")
                     else:
                         self.click()
-                elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and self.quiz and self.quiz.get("phase") == "paint":
-                    self.paint_pointer(e.pos, "up")
-                elif e.type == pygame.MOUSEMOTION and self.quiz and self.quiz.get("phase") == "paint":
-                    self.paint_pointer(e.pos, "move")
+                elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 3 and self.quiz and self.quiz.get("phase") == "furnish":
+                    self.furnish_rotate(e.pos)
+                elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and self.quiz:
+                    phase = self.quiz.get("phase")
+                    if phase == "paint":
+                        self.paint_pointer(e.pos, "up")
+                    elif phase == "furnish":
+                        self.furnish_pointer(e.pos, "up")
+                elif e.type == pygame.MOUSEWHEEL and self.quiz and self.quiz.get("phase") == "furnish":
+                    self.furnish_zoom(e.y, pygame.mouse.get_pos())
+                elif e.type == pygame.MOUSEMOTION and self.quiz:
+                    phase = self.quiz.get("phase")
+                    if phase == "paint":
+                        self.paint_pointer(e.pos, "move")
+                    elif phase == "furnish":
+                        self.furnish_pointer(e.pos, "move")
             if self.shot:
                 dt = 1 / 60
             self.update(dt)
