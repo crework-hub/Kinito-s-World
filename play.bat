@@ -12,6 +12,6 @@ if %errorlevel%==0 (
 if errorlevel 1 (
   echo.
   echo Не удалось запустить игру.
-  echo Установи зависимости: pip install -r requirements.txt
+  echo Сначала запусти install.bat в этой же папке.
   pause
 )

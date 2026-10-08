@@ -23,21 +23,25 @@
 
 ## Как запустить
 
-Нужны Python 3 и видеокарта с OpenGL. Один раз поставь зависимости:
+Нужны Python 3 и видеокарта с OpenGL. При установке Python отметь **Add python.exe to PATH**. Если этой галочки нет, подойдёт и лаунчер `py`.
+
+Один раз поставь зависимости двойным щелчком по `install.bat` в папке проекта. Он сам вызовет `python` или `py -3` и выполнит `pip install -r requirements.txt`. В конце окно напишет, получилось ли.
+
+То же самое можно поставить вручную:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-На Windows, если команда `python` не находится:
+Если команда `python` не находится:
 
 ```bash
-py -m pip install -r requirements.txt
+py -3 -m pip install -r requirements.txt
 ```
 
-Зависимости: `pygame-ce`, `PyOpenGL`, `numpy`.
+Зависимости: `pygame-ce`, `PyOpenGL`, `numpy`, `opencv-python`.
 
-Дальше игру запускает `play.bat` — двойной щелчок в папке проекта. Он сам вызывает `python` или `py -3`.
+Дальше игру запускает `play.bat` — двойной щелчок в той же папке. Он тоже сам вызывает `python` или `py -3`.
 
 Вручную то же самое:
 
