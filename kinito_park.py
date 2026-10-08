@@ -8,6 +8,7 @@ KINITO PARK  -  3D-парк развлечений в стиле KinitoPET (pyga
   F2   - размер "пикселей" (PS1-стиль)   M - музыка вкл/выкл   F1 - скрыть интерфейс
   Esc  - выход
 """
+import json
 import math
 import os
 import random
@@ -25,7 +26,7 @@ import yourworld as YW
 # ----------------------------------------------------------------------------
 # Настройки
 # ----------------------------------------------------------------------------
-WIN_W, WIN_H = 1152, 648
+WIN_W, WIN_H = 640, 480          # окно как в KinitoPET, 4:3
 PIX_SCALES = [4, 3, 2]            # внутреннее разрешение = окно / scale
 FOG_COL = (0.95, 0.975, 1.0)
 SKY_TOP = (0.84, 0.94, 1.0)
@@ -36,6 +37,32 @@ HS_WALK, HS_RUN = 3.3, 5.2
 HERE = os.path.dirname(os.path.abspath(__file__))
 SONG = os.path.join(HERE, "song", "my_world.ogg")
 FONT_PATH = os.path.join(HERE, "font", "EpilepsySansBold.ttf")
+
+# Рисовалка в начале игры, как MS Paint в KinitoPET. Пять рисунков вешаются дома вместо заготовок.
+DRAW_PROMPTS = [
+    ("Нарисуй то, что делает тебя счастливым.", "Я запомнил. Это будет висеть у тебя дома."),
+    ("А теперь то, от чего тебе грустно.", "Грустную картинку я тоже оставлю. Чтобы не забыть."),
+    ("Нарисуй своего лучшего друга.", "Хм. Совсем на меня не похоже. Но я сохраню."),
+    ("Нарисуй себя. Я хочу знать, как ты выглядишь.", "Так вот ты какой. Я буду смотреть на это каждый день."),
+    ("Последний рисунок: тот, кто стоит у тебя за спиной.", "Я так и думал. Он всегда рядом."),
+]
+PAINT_COLORS = [
+    (0, 0, 0), (128, 128, 128), (128, 0, 0), (128, 128, 0), (0, 128, 0), (0, 128, 128), (0, 0, 128), (128, 0, 128),
+    (255, 255, 255), (192, 192, 192), (255, 0, 0), (255, 255, 0), (0, 255, 0), (0, 255, 255), (0, 0, 255), (255, 0, 255),
+    (255, 128, 64), (255, 128, 128), (128, 64, 0), (0, 64, 128), (64, 64, 64), (255, 128, 0),
+]
+
+
+def player_name():
+    """Имя игрока — пользователь Windows, чтобы сохранение было его собственным."""
+    raw = os.environ.get("KINITO_USER") or os.environ.get("USERNAME") or os.environ.get("USER") or "player"
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in raw).strip("_")[:40]
+    return raw, (safe or "player")
+
+
+def profile_dir():
+    _, safe = player_name()
+    return os.path.join(HERE, "saves", safe)
 
 
 def load_font(size):
@@ -974,7 +1001,8 @@ class Game:
         # «Твой мир»: пространство за шестиугольной дырой; зависит от ответов на вопросы Кинито в начале игры
         self.world = None
         self.inw = False            # игрок сейчас в «Твоём мире»
-        self.quiz = None            # опрос в начале игры: dict(step, season)
+        self.quiz = None            # опрос и рисовалка в начале: dict(phase, step, season, food)
+        self.paint = None
         self.answers = None         # (сезон, еда)
         self.wflash = 0.0           # белая вспышка
         self.wtrans = None          # возврат в парк: dict(t, to, done)
@@ -1037,10 +1065,11 @@ class Game:
         if "--mg" in args:                                 # тест: сразу начать мини-игру (shoot | mole)
             self.start_mg(args[args.index("--mg") + 1])
             self.bub = None
+        self.apply_saved_drawings()                        # чужие текстуры не трогаем, если сохранения нет
         if "--world" in args:                              # тест: --world сезон,еда (0-3,0-3)
             v = [int(q) for q in args[args.index("--world") + 1].split(",")]
             self.set_answers(v[0], v[1])
-        elif self.shot:
+        elif self.shot and "--paint" not in args and "--quiz" not in args:
             self.set_answers(1, 0)
         if "--inw" in args:                                # тест: сразу в мире (--at: координаты относительно мира)
             self.enter_world(ride=False)
@@ -1050,10 +1079,14 @@ class Game:
                 self.gy = float(args[args.index("--gy") + 1])
         if "--wride" in args:                              # тест: сразу в поездку над лесом
             self.enter_world(ride=True)
-        if "--quiz" in args:
-            self.quiz = dict(step=int(args[args.index("--quiz") + 1]), season=1)
+        if "--paint" in args:
+            self.quiz = dict(phase="paint", step=2, season=1, food=0)
+            self.begin_drawing(0)
+        elif "--quiz" in args:
+            st = int(args[args.index("--quiz") + 1])
+            self.quiz = dict(phase="ask", step=min(st, 1), season=1 if st else None, food=None)
         elif not self.shot:
-            self.quiz = dict(step=0, season=None)          # опрос Кинито перед появлением в парке
+            self.try_resume()                              # опрос и рисунки, либо сразу парк, если уже сохранено
         if "--door" in args:
             self.door_open = 0.7
 
@@ -1371,17 +1404,315 @@ class Game:
 
     def quiz_pick(self, n):
         qz = self.quiz
-        if not qz or not (0 <= n < 4):
+        if not qz or qz.get("phase") != "ask" or not (0 <= n < 4):
             return
         self.audio.play("tick", .8)
         if qz["step"] == 0:
             qz["season"], qz["step"] = n, 1
+            self.save_profile()
             self.audio.play("chime", .7)
             return
-        self.set_answers(qz["season"] if qz["season"] is not None else 1, n)
+        qz["food"] = n
+        self.save_profile()
+        self.audio.play("chime", .7)
+        self.begin_drawing(self.count_drawings())
+
+    def read_profile(self):
+        path = os.path.join(profile_dir(), "profile.json")
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def save_profile(self):
+        qz = self.quiz
+        folder = profile_dir()
+        os.makedirs(folder, exist_ok=True)
+        data = self.read_profile() or {}
+        name, _ = player_name()
+        data["name"] = name
+        if qz:
+            if qz.get("season") is not None:
+                data["season"] = int(qz["season"])
+            if qz.get("food") is not None:
+                data["food"] = int(qz["food"])
+        path = os.path.join(folder, "profile.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def count_drawings(self):
+        folder = profile_dir()
+        return sum(os.path.exists(os.path.join(folder, "draw%d.png" % i)) for i in range(len(DRAW_PROMPTS)))
+
+    def replace_draw(self, index, surf):
+        """Подменяет уже загруженную текстуру картины, не создавая новый id (его держит список дома)."""
+        name = "draw%d" % index
+        if name not in TEX:
+            return
+        img = surf.convert_alpha()
+        w, h = img.get_size()
+        data = pygame.image.tobytes(img, "RGBA", True)
+        glBindTexture(GL_TEXTURE_2D, TEX[name])
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
+
+    def apply_saved_drawings(self):
+        folder = profile_dir()
+        loaded = []
+        for i in range(len(DRAW_PROMPTS)):
+            path = os.path.join(folder, "draw%d.png" % i)
+            if not os.path.exists(path):
+                continue
+            try:
+                loaded.append((i, pygame.image.load(path)))
+            except Exception:
+                continue
+        for i, img in loaded:
+            self.replace_draw(i, img)
+        if len(loaded) == len(DRAW_PROMPTS):
+            self.replace_draw(5, loaded[0][1])
+
+    def try_resume(self):
+        """Продолжить с места, где игрок вышел, либо сразу в парк, если всё уже нарисовано."""
+        data = self.read_profile() or {}
+        season, food = data.get("season"), data.get("food")
+        done = self.count_drawings()
+        if season is None:
+            self.quiz = dict(phase="ask", step=0, season=None, food=None)
+            return
+        if food is None:
+            self.quiz = dict(phase="ask", step=1, season=int(season), food=None)
+            return
+        if done < len(DRAW_PROMPTS):
+            self.quiz = dict(phase="paint", step=2, season=int(season), food=int(food))
+            self.begin_drawing(done)
+            return
+        self.set_answers(int(season), int(food))
         self.quiz = None
-        self.park_t0 = self.t                   # отсчёт вступительной заставки парка
+        self.park_t0 = self.t
+
+    def begin_drawing(self, index):
+        if index >= len(DRAW_PROMPTS):
+            self.finish_intro()
+            return
+        surf = pygame.Surface((192, 120))
+        surf.fill((255, 255, 255))
+        name, _ = player_name()
+        prompt = DRAW_PROMPTS[index][0]
+        if index == 0:
+            prompt = "%s, давай порисуем. %s" % (name, prompt)
+        self.paint = dict(surf=surf, tool="pencil", color=(0, 0, 0), last=None, down=False,
+                          line_a=None, dirty=True, snd_t=0.0, warn="", prompt=prompt, react="")
+        self.quiz["phase"] = "paint"
+        self.quiz["draw_i"] = index
+        pygame.event.set_grab(False)
+        pygame.mouse.set_visible(False)
+        pygame.mouse.get_rel()
+
+    def finish_intro(self):
+        qz = self.quiz
+        season = qz["season"] if qz and qz.get("season") is not None else 1
+        food = qz["food"] if qz and qz.get("food") is not None else 0
+        self.apply_saved_drawings()
+        self.set_answers(int(season), int(food))
+        self.quiz = None
+        self.paint = None
+        self.park_t0 = self.t
+        pygame.event.set_grab(True)
+        pygame.mouse.set_visible(False)
+        pygame.mouse.get_rel()
         self.audio.play("chime", .9)
+
+    def paint_geom(self):
+        W, H = WIN_W, WIN_H
+        bar = 40
+        wx, wy, ww, wh = 8, bar + 4, W - 16, H - bar - 10
+        title, tools, pal = 22, 56, 50
+        canvas = (wx + tools + 6, wy + title + 4, ww - tools - 12, wh - title - pal - 8)
+        return dict(bar=(0, 0, W, bar), win=(wx, wy, ww, wh), title=(wx, wy, ww, title),
+                    tools=(wx + 4, wy + title + 4, tools - 8, wh - title - pal - 8),
+                    canvas=canvas, pal=(wx + 4, wy + wh - pal + 4, ww - 8, pal - 8))
+
+    def paint_upload(self):
+        p = self.paint
+        if not p or not p["dirty"]:
+            return
+        surf = p["surf"]
+        w, h = surf.get_size()
+        data = pygame.image.tobytes(surf, "RGBA", True)
+        if "canvas" not in TEX:
+            upload("canvas", data, w, h, mip=False, repeat=False)
+        else:
+            glBindTexture(GL_TEXTURE_2D, TEX["canvas"])
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data)
+        p["dirty"] = False
+
+    def paint_ink(self):
+        arr = pygame.surfarray.array3d(self.paint["surf"])
+        white = (arr[:, :, 0] > 248) & (arr[:, :, 1] > 248) & (arr[:, :, 2] > 248)
+        return int((~white).sum())
+
+    def paint_stamp(self, a, b):
+        p = self.paint
+        tool = p["tool"]
+        if tool == "erase":
+            col, width = (255, 255, 255), 12
+        elif tool == "brush":
+            col, width = p["color"], 8
+        else:
+            col, width = p["color"], 3
+        surf = p["surf"]
+        pygame.draw.line(surf, col, a, b, width)
+        pygame.draw.circle(surf, col, (int(b[0]), int(b[1])), max(1, width // 2))
+        p["dirty"] = True
+        p["react"] = ""
+        p["warn"] = ""
+        kind = "erase" if tool == "erase" else "pencil"
+        if self.t - p["snd_t"] > 0.055:
+            self.audio.play(kind, .6)
+            p["snd_t"] = self.t
+
+    def paint_to_canvas(self, pos):
+        """Экранные координаты -> пиксели холста (он мельче окна, поэтому штрих на стене жирный)."""
+        x, y, w, h = self.paint_geom()["canvas"]
+        sw, sh = self.paint["surf"].get_size()
+        return (pos[0] - x) / max(1, w) * sw, (pos[1] - y) / max(1, h) * sh, sw, sh
+
+    def paint_fill(self, x, y):
+        surf = self.paint["surf"]
+        w, h = surf.get_size()
+        if not (0 <= x < w and 0 <= y < h):
+            return
+        px = pygame.surfarray.pixels3d(surf)
+        target = px[int(x), int(y)].copy()
+        repl = np.array(self.paint["color"], np.uint8)
+        if (target == repl).all():
+            del px
+            return
+        stack = [(int(x), int(y))]
+        while stack:
+            cx, cy = stack.pop()
+            if cx < 0 or cy < 0 or cx >= w or cy >= h or (px[cx, cy] != target).any():
+                continue
+            x0 = cx
+            while x0 > 0 and (px[x0 - 1, cy] == target).all():
+                x0 -= 1
+            x1 = cx
+            while x1 + 1 < w and (px[x1 + 1, cy] == target).all():
+                x1 += 1
+            px[x0:x1 + 1, cy] = repl
+            if cy > 0:
+                row = px[x0:x1 + 1, cy - 1]
+                hits = np.where((row == target).all(axis=1))[0]
+                stack.extend((x0 + int(i), cy - 1) for i in hits)
+            if cy + 1 < h:
+                row = px[x0:x1 + 1, cy + 1]
+                hits = np.where((row == target).all(axis=1))[0]
+                stack.extend((x0 + int(i), cy + 1) for i in hits)
+        del px
+        self.paint["dirty"] = True
+        self.paint["react"] = ""
+        self.paint["warn"] = ""
+        self.audio.play("pencil", .45)
+
+    def paint_pointer(self, pos, kind):
+        p = self.paint
+        if not p:
+            return
+        g = self.paint_geom()
+        if kind == "down":
+            if self._hit_done(pos, g):
+                self.paint_finish()
+                return
+            tool = self._hit_tool(pos, g)
+            if tool:
+                p["tool"] = tool
+                self.audio.play("tick", .5)
+                return
+            col = self._hit_color(pos, g)
+            if col is not None:
+                p["color"] = col
+                self.audio.play("tick", .4)
+                return
+            lx, ly, w, h = self.paint_to_canvas(pos)
+            if not (0 <= lx < w and 0 <= ly < h):
+                return
+            p["down"] = True
+            if p["tool"] == "fill":
+                self.paint_fill(lx, ly)
+                p["down"] = False
+                return
+            if p["tool"] == "line":
+                p["line_a"] = (lx, ly)
+                p["last"] = (lx, ly)
+                return
+            self.paint_stamp((lx, ly), (lx, ly))
+            p["last"] = (lx, ly)
+        elif kind == "move" and p["down"]:
+            lx, ly, w, h = self.paint_to_canvas(pos)
+            lx = clamp(lx, 0, w - 1)
+            ly = clamp(ly, 0, h - 1)
+            if p["tool"] == "line":
+                p["last"] = (lx, ly)
+                return
+            if p["last"] is not None:
+                self.paint_stamp(p["last"], (lx, ly))
+            p["last"] = (lx, ly)
+        elif kind == "up":
+            if p["down"] and p["tool"] == "line" and p["line_a"] and p["last"]:
+                pygame.draw.line(p["surf"], p["color"], p["line_a"], p["last"], 3)
+                p["dirty"] = True
+                p["react"] = ""
+                p["warn"] = ""
+                self.audio.play("pencil", .6)
+            p["down"] = False
+            p["last"] = None
+            p["line_a"] = None
+
+    def _hit_done(self, pos, g):
+        W = WIN_W
+        return pygame.Rect(W - 118, 8, 100, 24).collidepoint(pos)
+
+    def _hit_tool(self, pos, g):
+        x, y, w, _ = g["tools"]
+        names = ("pencil", "brush", "fill", "line", "erase")
+        for i, name in enumerate(names):
+            if pygame.Rect(x + 4, y + 4 + i * 34, 32, 30).collidepoint(pos):
+                return name
+        return None
+
+    def _hit_color(self, pos, g):
+        x, y, _, _ = g["pal"]
+        for i, col in enumerate(PAINT_COLORS):
+            colx = x + 46 + (i % 11) * 22
+            coly = y + 4 + (i // 11) * 20
+            if pygame.Rect(colx, coly, 20, 18).collidepoint(pos):
+                return col
+        return None
+
+    def paint_finish(self):
+        p = self.paint
+        qz = self.quiz
+        if not p or not qz:
+            return
+        if self.paint_ink() < 30:
+            p["warn"] = "Тут пока пусто. Нарисуй хоть немного."
+            self.audio.play("tick", .6)
+            return
+        i = qz["draw_i"]
+        folder = profile_dir()
+        os.makedirs(folder, exist_ok=True)
+        pygame.image.save(p["surf"], os.path.join(folder, "draw%d.png" % i))
+        self.save_profile()
+        self.audio.play("chime", .65)
+        p["warn"] = ""
+        self.begin_drawing(i + 1)
+        if self.paint and i + 1 < len(DRAW_PROMPTS):
+            self.paint["react"] = DRAW_PROMPTS[i][1]
 
     def enter_world(self, ride):
         """Тест/переход: оказаться в «Твоём мире» (ride=True - на горках над лесом, иначе - у посадки)."""
@@ -1435,25 +1766,115 @@ class Game:
         qz = self.quiz
         self.rect(0, 0, W, H, (.07, .03, .16, 1))
         # декоративные «шахматные» ленты как на вывеске парка
-        for i in range(24):
+        band = 12
+        for i in range(16):
             c = (.9, .1, .2, .9) if i % 2 == 0 else (.12, .16, .9, .9)
-            self.rect(i * W / 24, 0, W / 24 + 1, 16, c)
-            self.rect(i * W / 24, H - 16, W / 24 + 1, 16, c)
-        self.rect(W / 2 - 340, H / 2 - 215, 680, 440, (.1, .06, .22, .96))
-        self.rect(W / 2 - 336, H / 2 - 211, 672, 432, (.34, .2, .6, .35))
-        self.text("KINITO PARK", 44, W / 2, H / 2 - 258, (255, 226, 60), (90, 30, 140))
-        self.text("Прежде чем ты войдёшь в парк, давай познакомимся.", 20, W / 2, H / 2 - 190, (230, 200, 255), (40, 20, 80))
-        self.text("Вопрос %d из 2" % (qz["step"] + 1), 18, W / 2, H / 2 - 160, (200, 200, 220), None)
+            self.rect(i * W / 16, 0, W / 16 + 1, band, c)
+            self.rect(i * W / 16, H - band, W / 16 + 1, band, c)
+        pw, ph = min(560, W - 48), min(400, H - 48)
+        x0, y0 = (W - pw) / 2, (H - ph) / 2
+        self.rect(x0, y0, pw, ph, (.1, .06, .22, .96))
+        self.rect(x0 + 4, y0 + 4, pw - 8, ph - 8, (.34, .2, .6, .35))
+        cx = W / 2
+        self.text("KINITO PARK", 28, cx, y0 + 14, (255, 226, 60), (90, 30, 140))
+        self.text("Прежде чем ты войдёшь в парк, давай познакомимся.", 16, cx, y0 + 52, (230, 200, 255), (40, 20, 80))
+        self.text("Вопрос %d из 2" % (qz["step"] + 1), 16, cx, y0 + 78, (200, 200, 220), None)
         if qz["step"] == 0:
             q, opts = "Какое твоё любимое время года?", YW.SEASONS
         else:
             q, opts = "Какая твоя любимая еда?", YW.FOODS
-        self.text(q, 34, W / 2, H / 2 - 116, (255, 255, 255), (60, 30, 120))
+        self.text(q, 22, cx, y0 + 112, (255, 255, 255), (60, 30, 120))
         for i, o in enumerate(opts):
-            self.text("[%d]  %s" % (i + 1, o), 34, W / 2 - 120, H / 2 - 44 + i * 54, (255, 226, 120), (60, 30, 120), "left")
-        note = "Я всё запомню..." if qz["step"] == 0 else "Спасибо. Теперь я знаю о тебе почти всё."
-        self.text(note, 22, W / 2, H / 2 + 180, (230, 200, 255), (40, 20, 80))
-        self.text("Нажми 1-4", 18, W / 2, H / 2 + 208, (200, 200, 220), None)
+            self.text("[%d]  %s" % (i + 1, o), 24, cx - 100, y0 + 156 + i * 38, (255, 226, 120), (60, 30, 120), "left")
+        note = "Я всё запомню..." if qz["step"] == 0 else "Спасибо. Теперь нарисуй для меня."
+        self.text(note, 16, cx, y0 + ph - 64, (230, 200, 255), (40, 20, 80))
+        self.text("Нажми 1-4", 16, cx, y0 + ph - 36, (200, 200, 220), None)
+
+    def ensure_paint_icons(self):
+        if getattr(self, "_paint_icons", False):
+            return
+        def up(name, draw):
+            s = pygame.Surface((24, 24), pygame.SRCALPHA)
+            draw(s)
+            upload(name, pygame.image.tobytes(s, "RGBA", True), 24, 24, mip=False, repeat=False)
+        up("icon_pencil", lambda s: (pygame.draw.line(s, (40, 40, 40), (5, 19), (15, 7), 2),
+                                      pygame.draw.polygon(s, (240, 210, 70), [(14, 5), (19, 10), (16, 11), (13, 7)])))
+        up("icon_brush", lambda s: (pygame.draw.line(s, (50, 50, 50), (5, 19), (13, 9), 4),
+                                     pygame.draw.circle(s, (30, 30, 30), (16, 7), 4)))
+        up("icon_fill", lambda s: pygame.draw.polygon(s, (40, 90, 200), [(6, 16), (10, 6), (16, 8), (18, 16), (8, 20)]))
+        up("icon_line", lambda s: pygame.draw.line(s, (20, 20, 20), (4, 18), (19, 5), 2))
+        up("icon_erase", lambda s: (pygame.draw.rect(s, (250, 170, 190), (5, 7, 14, 12)),
+                                     pygame.draw.rect(s, (80, 40, 50), (5, 7, 14, 12), 1)))
+        self._paint_icons = True
+
+    def hud_paint(self):
+        self.ensure_paint_icons()
+        self.paint_upload()
+        W, H = WIN_W, WIN_H
+        g = self.paint_geom()
+        p = self.paint
+        qz = self.quiz
+        self.rect(0, 0, W, H, (.07, .03, .16, 1))
+        self.rect(0, 0, W, g["bar"][3], (.14, .07, .26, 1))
+        self.text(p["prompt"], 14, 10, 3, (255, 236, 180), (40, 20, 70), "left")
+        sub = p["warn"] or p["react"] or ("Рисунок %d из %d" % (qz["draw_i"] + 1, len(DRAW_PROMPTS)))
+        self.text(sub, 13, 10, 20, (255, 150, 150) if p["warn"] else (220, 200, 235), None, "left")
+        self.rect(W - 112, 8, 96, 24, (.55, .32, .78, 1))
+        self.text("Готово", 16, W - 64, 10, (255, 255, 255), (40, 20, 70))
+        wx, wy, ww, wh = g["win"]
+        self.rect(wx, wy, ww, wh, (.80, .80, .76, 1))
+        self.rect(wx + 3, wy + 3, ww - 6, 18, (.70, .70, .66, 1))
+        self.text("untitled - Paint", 14, wx + 8, wy + 4, (30, 30, 30), None, "left")
+        self.rect(wx + ww - 22, wy + 4, 16, 14, (.86, .86, .82, 1))
+        self.text("x", 12, wx + ww - 14, wy + 4, (40, 40, 40), None)
+        tx, ty, _, _ = g["tools"]
+        icons = ("icon_pencil", "icon_brush", "icon_fill", "icon_line", "icon_erase")
+        names = ("pencil", "brush", "fill", "line", "erase")
+        for i, (icon, name) in enumerate(zip(icons, names)):
+            bx, by = tx + 4, ty + 4 + i * 34
+            sel = p["tool"] == name
+            self.rect(bx, by, 32, 30, ((.55, .55, .70, 1) if sel else (.88, .88, .84, 1)))
+            self.tex_quad(TEX[icon], bx + 4, by + 3, 24, 24)
+        # текущий цвет, как зелёный квадрат в Paint
+        px0, py0, _, _ = g["pal"]
+        self.rect(px0 + 4, py0 + 6, 28, 28, (.55, .55, .55, 1))
+        cr, cg, cb = [c / 255 for c in p["color"]]
+        self.rect(px0 + 8, py0 + 10, 20, 20, (cr, cg, cb, 1))
+        for i, col in enumerate(PAINT_COLORS):
+            colx = px0 + 46 + (i % 11) * 22
+            coly = py0 + 6 + (i // 11) * 20
+            self.rect(colx, coly, 20, 18, (col[0] / 255, col[1] / 255, col[2] / 255, 1))
+            if col == p["color"]:
+                self.rect(colx - 1, coly - 1, 22, 20, (1, 1, 1, .0))
+                glBindTexture(GL_TEXTURE_2D, TEX["white"])
+                glColor3f(0, 0, 0)
+                glBegin(GL_LINE_LOOP)
+                glVertex2f(colx - 1, coly - 1)
+                glVertex2f(colx + 21, coly - 1)
+                glVertex2f(colx + 21, coly + 19)
+                glVertex2f(colx - 1, coly + 19)
+                glEnd()
+        cx, cy, cw, ch = g["canvas"]
+        self.rect(cx - 2, cy - 2, cw + 4, ch + 4, (.45, .45, .45, 1))
+        if "canvas" in TEX:
+            self.tex_quad(TEX["canvas"], cx, cy, cw, ch)
+        if p["down"] and p["tool"] == "line" and p["line_a"] and p["last"]:
+            sw, sh = p["surf"].get_size()
+            cr, cg, cb = [c / 255 for c in p["color"]]
+            glBindTexture(GL_TEXTURE_2D, TEX["white"])
+            glColor3f(cr, cg, cb)
+            glBegin(GL_LINES)
+            glVertex2f(cx + p["line_a"][0] / sw * cw, cy + p["line_a"][1] / sh * ch)
+            glVertex2f(cx + p["last"][0] / sw * cw, cy + p["last"][1] / sh * ch)
+            glEnd()
+        mx, my = pygame.mouse.get_pos()
+        glBindTexture(GL_TEXTURE_2D, TEX["white"])
+        glColor3f(0, 0, 0)
+        glBegin(GL_LINE_LOOP)
+        glVertex2f(mx, my)
+        glVertex2f(mx + 4, my + 14)
+        glVertex2f(mx + 8, my + 11)
+        glEnd()
 
     def interact(self):
         if self.mode != "park" or self.seq or self.quiz or self.wtrans:
@@ -2844,7 +3265,10 @@ class Game:
         elif mode == "hs_glitch":
             self.draw_glitch()
         elif mode == "park" and self.quiz:
-            self.hud_quiz()
+            if self.quiz.get("phase") == "paint":
+                self.hud_paint()
+            else:
+                self.hud_quiz()
         elif self.show_hud and mode == "park":
             # прицел - маленький полый круг (в Hide and Seek прицела нет)
             px = PIX_SCALES[self.scale_i]
@@ -2895,7 +3319,7 @@ class Game:
         if tt < 28 and not self.shot and not self.inw:
             a = clamp((28 - tt) / 4, 0, 1)
             self.text("WASD - ходить   Shift - бежать   ПКМ - зум   E - действие   F2 - пиксели   Esc - выход",
-                      20, 20, H - 34, (255, 255, 255), (60, 30, 120), "left", a)
+                      14, 12, H - 28, (255, 255, 255), (60, 30, 120), "left", a)
         if tt < 7 and not self.shot:
             fade = clamp(1 - tt / 3.0, 0, 1)
             self.rect(0, 0, W, H, (1, 1, 1, fade))
@@ -2915,9 +3339,11 @@ class Game:
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_ESCAPE:
                         running = False
-                    elif self.quiz and pygame.K_1 <= e.key <= pygame.K_4:
+                    elif self.quiz and self.quiz.get("phase") == "paint" and e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self.paint_finish()
+                    elif self.quiz and self.quiz.get("phase") != "paint" and pygame.K_1 <= e.key <= pygame.K_4:
                         self.quiz_pick(e.key - pygame.K_1)
-                    elif self.quiz and pygame.K_KP1 <= e.key <= pygame.K_KP4:
+                    elif self.quiz and self.quiz.get("phase") != "paint" and pygame.K_KP1 <= e.key <= pygame.K_KP4:
                         self.quiz_pick(e.key - pygame.K_KP1)
                     elif e.key == pygame.K_e:
                         self.interact()
@@ -2930,7 +3356,14 @@ class Game:
                     elif e.key == pygame.K_m:
                         self.audio.toggle_mute()
                 elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                    self.click()
+                    if self.quiz and self.quiz.get("phase") == "paint":
+                        self.paint_pointer(e.pos, "down")
+                    else:
+                        self.click()
+                elif e.type == pygame.MOUSEBUTTONUP and e.button == 1 and self.quiz and self.quiz.get("phase") == "paint":
+                    self.paint_pointer(e.pos, "up")
+                elif e.type == pygame.MOUSEMOTION and self.quiz and self.quiz.get("phase") == "paint":
+                    self.paint_pointer(e.pos, "move")
             if self.shot:
                 dt = 1 / 60
             self.update(dt)

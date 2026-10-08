@@ -319,6 +319,27 @@ def s_tick():
     return np.sin(TAU * 1400 * t) * np.exp(-t * 110)
 
 
+def s_pencil(rng):
+    """Короткий скрип грифеля по бумаге."""
+    dur = .065
+    t = _t(dur)
+    n = noise(dur, 1600, 7200, rng)
+    f = rng.uniform(1900, 3600)
+    grit = np.sin(TAU * f * t) * (.55 + .45 * np.sin(TAU * rng.uniform(70, 130) * t))
+    env = np.minimum(1.0, t * 600) * np.exp(-t * 32)
+    return crush(_norm(n * .82 + grit * .4) * env, hold=2, levels=16)
+
+
+def s_erase(rng):
+    """Мягкое шуршание ластика."""
+    dur = .09
+    t = _t(dur)
+    n = noise(dur, 250, 1600, rng)
+    rub = noise(dur, 700, 2200, rng) * np.sin(TAU * rng.uniform(28, 48) * t)
+    env = np.minimum(1.0, t * 280) * np.exp(-t * 16)
+    return _norm((n * .75 + rub * .45) * env)
+
+
 def s_clunk(rng):
     t = _t(.3)
     v = np.sin(TAU * 110 * t) * np.exp(-t * 18) + .5 * fft_filter(rng.standard_normal(len(t)), 600, 4000) * np.exp(-t * 35)
@@ -368,6 +389,8 @@ class Audio:
         S["clunk"] = [self._snd(s_clunk(rng), .7)]
         S["build"] = [self._snd(s_build(rng), .7)]
         S["chime"] = [self._snd(s_chime(), .5)]
+        S["pencil"] = [self._snd(s_pencil(rng), .7) for _ in range(5)]
+        S["erase"] = [self._snd(s_erase(rng), .65) for _ in range(4)]
         L = {}
         L["fountain"] = self._snd(s_water(rng), 1.0)
         L["musicbox"] = self._snd(s_musicbox(), 1.0)
