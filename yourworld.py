@@ -635,6 +635,7 @@ def make_textures():
     upload("hand", pygame.image.tobytes(h, "RGBA", True), 24, 24, mip=False, repeat=False)
 
     # «рисунки игрока» (детские рисунки цветными карандашами)
+    DRAW_BASE.clear()
     r = random.Random(21)
 
     def new():
@@ -646,6 +647,7 @@ def make_textures():
 
     def fin(i, s):
         pygame.draw.rect(s, (130, 108, 84), (0, 0, 128, 96), 1)
+        DRAW_BASE.append(s.copy())
         upload("draw%d" % i, pygame.image.tobytes(s, "RGBA", True), 128, 96, mip=False, repeat=False)
 
     s = new()                                                    # 0: солнце и домик
@@ -784,6 +786,9 @@ def door_frame(axis, c, cen, w, y0, hgt, tt=.4):
     wb(axis, c, cen - w / 2 - .04, y0, .09, hgt, tt, WHITE)
     wb(axis, c, cen + w / 2 + .04, y0, .09, hgt, tt, WHITE)
     wb(axis, c, cen, y0 + hgt, w + .26, .1, tt, WHITE)
+
+
+DRAW_BASE = []   # исходники картин на стенах, до line boil
 
 
 # ----------------------------------------------------------------------------

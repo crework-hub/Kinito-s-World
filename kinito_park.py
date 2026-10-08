@@ -1467,6 +1467,8 @@ class Game:
         self.mole_next = 2.0
         # «Твой мир»: пространство за шестиугольной дырой; зависит от ответов на вопросы Кинито в начале игры
         self.world = None
+        self.wall_draws = [s.copy() for s in YW.DRAW_BASE]
+        self._wall_boil = None
         self.inw = False            # игрок сейчас в «Твоём мире»
         self.quiz = None            # опрос, рисовалка и расстановка мебели: dict(phase, step, season, food)
         self.paint = None
@@ -1943,9 +1945,12 @@ class Game:
             except Exception:
                 continue
         for i, img in loaded:
+            self.wall_draws[i] = img.convert()
             self.replace_draw(i, img)
         if len(loaded) == len(DRAW_PROMPTS):
+            self.wall_draws[5] = loaded[0][1].convert()
             self.replace_draw(5, loaded[0][1])
+        self._wall_boil = None
 
     def try_resume(self):
         """Продолжить с места, где игрок вышел, либо сразу в парк, если всё уже нарисовано."""
@@ -2048,8 +2053,9 @@ class Game:
         xs = np.arange(w, dtype=np.int32)[:, None]
         ys = np.arange(h, dtype=np.int32)[None, :]
         cell = 7
-        hsh = ((xs // cell) * 17 + (ys // cell) * 31 + int(phase) * 13) % 5
-        table = np.array([[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]], np.int32)
+        # 4 сдвига из 7: примерно на 30% меньше кусков линии, чем когда двигались 4 из 5
+        hsh = ((xs // cell) * 17 + (ys // cell) * 31 + int(phase) * 13) % 7
+        table = np.array([[0, 0], [0, 0], [0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]], np.int32)
         sx = np.clip(xs - table[hsh, 0], 0, w - 1)
         sy = np.clip(ys - table[hsh, 1], 0, h - 1)
         out = pygame.Surface((w, h))
@@ -2073,6 +2079,17 @@ class Game:
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data)
         p["dirty"] = False
         p["_boil"] = phase
+
+    def update_wall_boil(self):
+        """Те же живые линии на картинах в доме. Исходник не портится."""
+        if not self.inw or not self.wall_draws:
+            return
+        phase = int(self.t * 8) % 4
+        if phase == self._wall_boil:
+            return
+        self._wall_boil = phase
+        for i, surf in enumerate(self.wall_draws):
+            self.replace_draw(i, self._line_boil(surf, phase))
 
     def paint_ink(self):
         arr = pygame.surfarray.array3d(self.paint["surf"])
@@ -3282,6 +3299,7 @@ class Game:
         self.update_bubble(dt)
         w = self.world
         if w and self.inw:
+            self.update_wall_boil()
             w.update(dt)
             if not w.entered and w.inside(self.px, self.pz) and not self.ride:
                 w.entered = True
