@@ -5,7 +5,7 @@ KINITO PARK  -  3D-парк развлечений в стиле KinitoPET (pyga
 Управление:
   WASD - ходьба      Shift - бег       Мышь - обзор
   ПКМ  - зум         E     - действие (аттракцион / белая дверь / тир / «Твой мир»)
-  F2   - размер "пикселей" (PS1-стиль)   M - музыка вкл/выкл   F1 - скрыть интерфейс
+  M - музыка вкл/выкл   F1 - скрыть интерфейс
   Esc  - выход
 """
 import json
@@ -27,7 +27,7 @@ import yourworld as YW
 # Настройки
 # ----------------------------------------------------------------------------
 WIN_W, WIN_H = 640, 480          # окно как в KinitoPET, 4:3
-PIX_SCALES = [4, 3, 2]            # внутреннее разрешение = окно / scale
+PIX = 2                           # внутреннее разрешение = окно / 2 (самый плотный из трёх)
 FOG_COL = (0.95, 0.975, 1.0)
 SKY_TOP = (0.84, 0.94, 1.0)
 C0 = (0.0, -30.0)                 # центр парка
@@ -1396,8 +1396,7 @@ class Game:
             self.screen = pygame.display.set_mode((WIN_W, WIN_H), flags)
         pygame.display.set_caption("KINITO PARK")
         self.clock = pygame.time.Clock()
-        self.scale_i = 1
-        self.RW, self.RH = WIN_W // PIX_SCALES[1], WIN_H // PIX_SCALES[1]
+        self.RW, self.RH = WIN_W // PIX, WIN_H // PIX
 
         self.setup_gl()
         gen_textures()
@@ -4352,7 +4351,6 @@ class Game:
                 self.hud_quiz()
         elif self.show_hud and mode == "park":
             # прицел - маленький полый круг (в Hide and Seek прицела нет)
-            px = PIX_SCALES[self.scale_i]
             s = 8
             self.tex_quad(TEX["cross"], round(W / 2 - s / 2), round(H / 2 - s / 2), s, s)
             self.hud_park()
@@ -4399,7 +4397,7 @@ class Game:
         tt = self.t - self.park_t0
         if tt < 28 and not self.shot and not self.inw:
             a = clamp((28 - tt) / 4, 0, 1)
-            self.text("WASD - ходить   Shift - бежать   ПКМ - зум   E - действие   F2 - пиксели   Esc - выход",
+            self.text("WASD - ходить   Shift - бежать   ПКМ - зум   E - действие   Esc - выход",
                       14, 12, H - 28, (255, 255, 255), (60, 30, 120), "left", a)
         if tt < 7 and not self.shot:
             fade = clamp(1 - tt / 3.0, 0, 1)
@@ -4433,10 +4431,6 @@ class Game:
                         self.quiz_pick(e.key - pygame.K_KP1)
                     elif e.key == pygame.K_e:
                         self.interact()
-                    elif e.key == pygame.K_F2:
-                        self.scale_i = (self.scale_i + 1) % len(PIX_SCALES)
-                        s = PIX_SCALES[self.scale_i]
-                        self.RW, self.RH = WIN_W // s, WIN_H // s
                     elif e.key == pygame.K_F1:
                         self.show_hud = not self.show_hud
                     elif e.key == pygame.K_m:
