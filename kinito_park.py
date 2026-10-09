@@ -2599,6 +2599,62 @@ class Game:
             h = w * FH / FW
         self.tex_quad(TEX[name], rect.centerx - w / 2, rect.centery - h / 2, w, h)
 
+    def _mark_window(self, fl, axis, c, mid, w):
+        frame, glass, bar = (.93, .91, .84, 1), (.58, .8, .94, 1), (.32, .46, .58, 1)
+        t = 0.2
+        if axis == "x":
+            self._plan_rect(fl, mid - w / 2 - .06, c - t - .03, mid + w / 2 + .06, c + t + .03, frame)
+            self._plan_rect(fl, mid - w / 2, c - t, mid + w / 2, c + t, glass)
+            self._plan_rect(fl, mid - .04, c - t, mid + .04, c + t, bar)
+            self._plan_rect(fl, mid - w / 2, c - .035, mid + w / 2, c + .035, bar)
+        else:
+            self._plan_rect(fl, c - t - .03, mid - w / 2 - .06, c + t + .03, mid + w / 2 + .06, frame)
+            self._plan_rect(fl, c - t, mid - w / 2, c + t, mid + w / 2, glass)
+            self._plan_rect(fl, c - t, mid - .04, c + t, mid + .04, bar)
+            self._plan_rect(fl, c - .035, mid - w / 2, c + .035, mid + w / 2, bar)
+
+    def _mark_picture(self, fl, axis, c, mid, ix, iz, tint):
+        wood, paper = (.46, .3, .16, 1), (.95, .9, .78, 1)
+        ox, oz = ix * .28, iz * .28
+        if axis == "x":
+            x, z = mid, c + oz
+            self._plan_rect(fl, x - .48, z - .13, x + .48, z + .13, wood)
+            self._plan_rect(fl, x - .36, z - .08, x + .36, z + .08, paper)
+            sx, sy = self.furnish_w2s(x, z, fl)
+        else:
+            x, z = c + ox, mid
+            self._plan_rect(fl, x - .13, z - .48, x + .13, z + .48, wood)
+            self._plan_rect(fl, x - .08, z - .36, x + .08, z + .36, paper)
+            sx, sy = self.furnish_w2s(x, z, fl)
+        self.disk(sx, sy, max(2.2, .07 * fl["scale"]), (*tint, 1), 10)
+
+    def _mark_fire(self, fl):
+        x, z = YW.FIRE_X, YW.FIRE_Z
+        stone, brick, soot = (.62, .6, .56, 1), (.62, .28, .2, 1), (.12, .08, .06, 1)
+        self._plan_rect(fl, x + .02, z - 1.02, x + 1.05, z + 1.02, stone)
+        self._plan_rect(fl, x - .05, z - .9, x + .52, z + .9, brick)
+        self._plan_rect(fl, x + .08, z - .42, x + .42, z + .42, soot)
+        self._plan_rect(fl, x + .12, z - .28, x + .38, z - .08, (.4, .22, .12, 1))
+        self._plan_rect(fl, x + .14, z + .02, x + .4, z + .22, (.32, .18, .1, 1))
+        for zz in (z - .22, z + .22):
+            sx, sy = self.furnish_w2s(x + .18, zz, fl)
+            self.disk(sx, sy, max(1.8, .05 * fl["scale"]), (.16, .12, .1, 1), 8)
+        sx, sy = self.furnish_w2s(x + .24, z, fl)
+        self.disk(sx, sy, max(2.0, .06 * fl["scale"]), (1.0, .55, .15, 1), 8)
+
+    def _mark_stairs(self, fl):
+        x0, x1 = 6.48, 8.52
+        z = 5.45
+        tread, nose = (.62, .44, .28, 1), (.28, .16, .1, 1)
+        while z > -1.65:
+            self._plan_rect(fl, x0, z, x1, z + .34, tread)
+            self._plan_rect(fl, x0, z + .28, x1, z + .36, nose)
+            z -= .58
+        self._plan_rect(fl, 6.4, -1.85, 6.52, 5.75, (.42, .26, .14, 1))
+        for zz in (-1.55, 1.9, 5.45):
+            sx, sy = self.furnish_w2s(6.46, zz, fl)
+            self.disk(sx, sy, max(2.4, .09 * fl["scale"]), (.22, .12, .07, 1), 10)
+
     def _draw_floor(self, fl, pal):
         wood, kitchen = (.76, .56, .38, 1), (.84, .66, .44, 1)
         carpet = (*pal["carpet"], 1)
@@ -2609,22 +2665,28 @@ class Game:
             self._plan_rect(fl, 1.08, -7.25, 6.28, 7.2, kitchen)
             self._plan_rect(fl, 6.28, 5.95, 8.55, 7.2, kitchen)
             self._plan_rect(fl, 0.7, -1.5, 1.15, 1.5, wood)
-            self._plan_rect(fl, 6.35, -1.9, 8.7, 5.9, (.28, .2, .14, 1))
-            for i in range(6):
-                self._plan_rect(fl, 6.55, -1.6 + i * 1.15, 8.55, -1.45 + i * 1.15, (.42, .3, .2, 1))
         else:
             self._plan_rect(fl, -8.75, -7.25, 8.55, -4.15, wood)
             self._plan_rect(fl, -8.75, -3.98, -0.35, 7.2, carpet)
             self._plan_rect(fl, -0.15, -3.98, 6.35, 1.55, (.92, .93, .95, 1))
             self._plan_rect(fl, -0.15, 1.85, 6.35, 7.2, (.86, .9, .94, 1))
             self._plan_rect(fl, 6.55, -4.0, 8.55, -2.05, wood)
-            self._plan_rect(fl, 6.4, -2.0, 8.7, 6.0, (.22, .16, .14, 1))
+        self._mark_stairs(fl)
         for box in YW.WALLS[fl["lvl"]]:
             if box[2] - box[0] > 2.2 and box[3] - box[1] > 4:
                 continue
             self._plan_rect(fl, *box, wall)
         if fl["lvl"] == 0:
-            self._plan_rect(fl, YW.DOOR_X - .75, 7.05, YW.DOOR_X + .75, 7.75, wood)
+            self._plan_rect(fl, YW.DOOR_X - .7, 7.15, YW.DOOR_X + .7, 7.55, (.94, .94, .9, 1))
+            sx, sy = self.furnish_w2s(YW.DOOR_X + .45, 7.35, fl)
+            self.disk(sx, sy, max(1.8, .05 * fl["scale"]), (.9, .75, .25, 1), 8)
+            self._mark_fire(fl)
+        wins, pics = YW.plan_decor(fl["lvl"])
+        for axis, c, mid, w, _ix, _iz in wins:
+            self._mark_window(fl, axis, c, mid, w)
+        inks = ((.85, .25, .3), (.25, .45, .8), (.3, .65, .35), (.9, .7, .2), (.7, .35, .75))
+        for i, (axis, c, mid, ix, iz) in enumerate(pics):
+            self._mark_picture(fl, axis, c, mid, ix, iz, inks[i % len(inks)])
 
     def ui_button(self, rect, label, kind, on=False):
         if kind == "green":
@@ -3817,6 +3879,7 @@ class Game:
         glMatrixMode(GL_MODELVIEW)
 
     def render_park(self):
+        glDisable(GL_LIGHT1)
         glClearColor(*FOG_COL, 1)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         self.draw_sky()
@@ -3870,6 +3933,18 @@ class Game:
         glLightfv(GL_LIGHT0, GL_POSITION, (.5, 1.0, .35, 0))
         glFogfv(GL_FOG_COLOR, tuple(e["fog"]) + (1,))
         glFogf(GL_FOG_DENSITY, e["dens"])
+        if w.season == 3:
+            flick = .84 + .16 * math.sin(self.t * 9.0) * math.sin(self.t * 3.2)
+            glEnable(GL_LIGHT1)
+            glLightfv(GL_LIGHT1, GL_AMBIENT, (.08 * flick, .03 * flick, 0, 1))
+            glLightfv(GL_LIGHT1, GL_DIFFUSE, (1.2 * flick, .48 * flick, .12 * flick, 1))
+            glLightfv(GL_LIGHT1, GL_SPECULAR, (0, 0, 0, 1))
+            glLightfv(GL_LIGHT1, GL_POSITION, (YW.WX + YW.FIRE_X + .7, .75, YW.WZ + YW.FIRE_Z, 1))
+            glLightf(GL_LIGHT1, GL_CONSTANT_ATTENUATION, .5)
+            glLightf(GL_LIGHT1, GL_LINEAR_ATTENUATION, .11)
+            glLightf(GL_LIGHT1, GL_QUADRATIC_ATTENUATION, .05)
+        else:
+            glDisable(GL_LIGHT1)
         glEnable(GL_LIGHTING)
         glEnable(GL_FOG)
         glEnable(GL_DEPTH_TEST)
@@ -3881,6 +3956,7 @@ class Game:
             draw_cart_train(w.track["L"] - .8, False, w.track)          # вагончик, на котором мы приехали
 
     def render_hs(self):
+        glDisable(GL_LIGHT1)
         L = self.hs_light
         glClearColor(.01, .008, .006, 1)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)

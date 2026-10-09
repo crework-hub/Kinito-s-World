@@ -32,6 +32,7 @@ LZ = 1.7                               # перегородка: ванная | 
 BED_DX, BATH_DX, LAUN_DZ = -5.4, 2.9, 4.6
 DOOR_Z = HD
 LAND_Z = 26.0                          # конец путей (посадка)
+FIRE_X, FIRE_Z = -8.62, -0.9           # камин у западной стены гостиной
 
 SEASONS = ["Весна", "Лето", "Осень", "Зима"]
 SEASON_ACC = ["весну", "лето", "осень", "зиму"]
@@ -42,7 +43,8 @@ FOOD_LOW = ["пицца", "бургер", "суши", "торт"]
 # Весь дом: мебель можно ставить на обоих этажах, но не в стены, на лестницу и в дверные проходы.
 OUTER = (-8.65, -7.22, 8.55, 7.18)
 WALLS = {
-    0: ((0.78, -7.5, 1.08, -1.55), (0.78, 1.55, 1.08, 7.5), (6.28, -7.6, 9.2, 5.9)),
+    0: ((0.78, -7.5, 1.08, -1.55), (0.78, 1.55, 1.08, 7.5), (6.28, -7.6, 9.2, 5.9),
+        (-8.75, -1.95, -7.55, 0.15)),
     1: ((-9.1, -4.32, -6.15, -3.98), (-4.65, -4.32, 2.15, -3.98), (3.65, -4.32, 6.7, -3.98),
         (-0.52, -4.15, -0.18, 3.85), (-0.52, 5.35, -0.18, 7.6),
         (-0.35, 1.52, 6.55, 1.88), (6.38, -4.15, 6.72, 7.6), (6.4, -2.05, 9.05, 6.05)),
@@ -50,6 +52,11 @@ WALLS = {
 CLEAR = {
     0: ((-2.95, 5.35, -0.65, 7.2), (-0.15, -1.45, 1.25, 1.45)),
     1: ((-6.2, -4.55, -4.6, -3.75), (2.05, -4.55, 3.75, -3.75), (-0.75, 3.85, 0.2, 5.35)),
+}
+# Камин стоит в гостиной и не двигается вместе с мебелью.
+FIXTURES = {
+    0: ((FIRE_X - 0.08, FIRE_Z - 1.08, FIRE_X + 1.15, FIRE_Z + 1.08),),
+    1: (),
 }
 PIECES = (
     dict(id="sofa", label="Диван", w=3.2, d=1.05),
@@ -188,7 +195,7 @@ def layout_reason(items):
             if x < x0 - 1e-3 or x > x1 + 1e-3 or z < z0 - 1e-3 or z > z1 + 1e-3:
                 return it["id"] + " outside"
         lvl = it["lvl"]
-        for box in WALLS[lvl]:
+        for box in WALLS[lvl] + FIXTURES[lvl]:
             if not _separated(pts, _box_pts(box), 0.03):
                 return it["id"] + " wall"
         for box in CLEAR[lvl]:
@@ -239,6 +246,70 @@ def sanitize_layout(raw):
                     it["placed"] = False
                     break
     return items
+
+
+def _pic_mids(a0, a1, holes, n):
+    """Те же места, куда вешаются картины на стене."""
+    pad = 0.62
+    blocked = sorted((hc - hw / 2 - pad, hc + hw / 2 + pad) for hc, hw in holes)
+    spans, cursor = [], a0
+    for b0, b1 in blocked:
+        if b0 - cursor > 1.7:
+            spans.append((cursor, b0))
+        cursor = max(cursor, b1)
+    if a1 - cursor > 1.7:
+        spans.append((cursor, a1))
+    spans.sort(key=lambda s: s[1] - s[0], reverse=True)
+    mids = []
+    for a, b in spans:
+        if len(mids) >= n:
+            break
+        length = b - a
+        count = 1 if length < 4.8 else (2 if length < 8.4 else 3)
+        count = min(count, n - len(mids))
+        for i in range(count):
+            mid = a + (i + 1) / (count + 1) * length
+            room = (b - .25) - (a + .25)
+            if room < .9:
+                continue
+            half = min(1.15, room) / 2
+            mids.append(min(max(mid, a + .25 + half), b - .25 - half))
+    return mids
+
+
+def plan_decor(lvl):
+    """Окна и картины для плана. Ось x — стена идёт вдоль x, последние два числа — внутрь комнаты."""
+    pics = []
+
+    def pic(axis, c, a0, a1, holes, n, ix, iz):
+        for mid in _pic_mids(a0, a1, holes, n):
+            pics.append((axis, c, mid, ix, iz))
+
+    if lvl == 0:
+        wins = [
+            ("x", HD, -6.2, 1.6, 0, -1), ("x", HD, 4.0, 1.6, 0, -1),
+            ("x", -HD, -5.2, 1.7, 0, 1), ("x", -HD, 3.0, 1.55, 0, 1),
+            ("z", -HW, -4.4, 1.6, 1, 0), ("z", -HW, 2.6, 1.6, 1, 0),
+        ]
+        front = [(DOOR_X, 1.3), (-6.2, 1.6), (4.0, 1.6), (AX, 1.1), (SX0, 1.4)]
+        back = [(-5.2, 1.7), (3.0, 1.55), (AX, 1.1), (SX0, 1.6)]
+        pic("x", -HD, -HW + 1.1, SX0 - 1.0, back, 3, 0, 1)
+        pic("x", HD, -HW + 1.1, SX0 - 1.0, front, 3, 0, -1)
+        pic("z", -HW, -HD + 1.1, HD - 1.1, [(-4.4, 1.6), (2.6, 1.6), (FIRE_Z, 2.2)], 2, 1, 0)
+        pic("z", AX, -HD + 1.2, HD - 1.2, [(0.0, 3.2)], 2, -1, 0)
+    else:
+        wins = [
+            ("x", HD, -6.2, 1.6, 0, -1), ("x", HD, 4.0, 1.6, 0, -1),
+            ("x", -HD, -5.2, 1.7, 0, 1), ("x", -HD, 3.0, 1.55, 0, 1),
+            ("z", -HW, -6.0, 1.6, 1, 0), ("z", -HW, 2.6, 1.6, 1, 0),
+        ]
+        pic("x", -HD, -HW + 1.1, HW - 1.1, [(-5.2, 1.7), (3.0, 1.55)], 3, 0, 1)
+        pic("x", HD, -HW + 1.1, SX0 - 1.0, [(-6.2, 1.6), (4.0, 1.6), (AX, 1.1)], 2, 0, -1)
+        pic("z", -HW, -HD + 1.1, BZ - 1.0, [(-6.0, 1.6)], 1, 1, 0)
+        pic("z", -HW, BZ + 1.0, HD - 1.1, [(2.6, 1.6)], 1, 1, 0)
+        pic("x", BZ, -HW + 1.1, RX - .7, [(BED_DX, 1.4)], 2, 0, 1)
+        pic("x", BZ, -HW + 1.1, SX0 - 1.0, [(BED_DX, 1.4), (BATH_DX, 1.4)], 3, 0, -1)
+    return wins, pics
 
 
 def _rot(x, z, ry, lx, lz):
@@ -343,10 +414,10 @@ def icon_parts(kind, sofa, bed):
     return [("box", 0, 0, 1.0, 1.0, (.5, .5, .5))]
 
 ENV = [   # туман/небо/земля/свет по сезонам
-    dict(fog=(.93, .95, .96), sky=(.70, .84, 1.0), ground=(.50, .76, .42), amb=(.54, .54, .57), dif=(.50, .47, .46), dens=.0075),
-    dict(fog=(1.0, .97, .86), sky=(.50, .78, 1.0), ground=(.42, .72, .30), amb=(.58, .57, .50), dif=(.66, .60, .44), dens=.0065),
+    dict(fog=(.97, .88, .90), sky=(.42, .68, .94), ground=(.42, .68, .38), amb=(.58, .50, .54), dif=(.78, .62, .58), dens=.011),
+    dict(fog=(.99, .88, .64), sky=(.22, .50, .88), ground=(.50, .64, .24), amb=(.58, .52, .38), dif=(.92, .74, .38), dens=.009),
     dict(fog=(.93, .80, .58), sky=(.96, .80, .52), ground=(.50, .44, .16), amb=(.62, .50, .38), dif=(.78, .56, .30), dens=.0100),
-    dict(fog=(.80, .86, .95), sky=(.66, .74, .92), ground=(.80, .86, .96), amb=(.54, .60, .76), dif=(.56, .62, .84), dens=.0095),
+    dict(fog=(.36, .42, .52), sky=(.10, .13, .24), ground=(.50, .56, .66), amb=(.24, .28, .38), dif=(.30, .36, .48), dens=.016),
 ]
 PAL = [   # цвета дома и комнат по сезонам
     dict(wall=(.58, .76, .98), roof=(.86, .46, .58), inner=(.92, .78, .86), floor=(.78, .56, .44), carpet=(.70, .64, .86),
@@ -355,8 +426,8 @@ PAL = [   # цвета дома и комнат по сезонам
          sofa=(.20, .42, .88), rug=(.98, .76, .3), bed=(1.0, .92, .1)),
     dict(wall=(.22, .46, .76), roof=(.80, .12, .12), inner=(.96, .82, .66), floor=(.52, .35, .26), carpet=(.70, .78, .92),
          sofa=(.20, .36, .78), rug=(.78, .36, .2), bed=(.90, .90, .1)),
-    dict(wall=(.58, .68, .84), roof=(.58, .42, .36), inner=(.87, .91, .98), floor=(.60, .46, .38), carpet=(.82, .90, .98),
-         sofa=(.36, .46, .72), rug=(.42, .56, .84), bed=(.82, .9, 1.0)),
+    dict(wall=(.38, .46, .56), roof=(.82, .24, .20), inner=(.94, .80, .64), floor=(.56, .36, .24), carpet=(.68, .38, .34),
+         sofa=(.58, .26, .22), rug=(.80, .44, .28), bed=(.88, .74, .62)),
 ]
 WOOD = (.62, .42, .28)
 DWOOD = (.34, .24, .17)
@@ -876,8 +947,8 @@ class World:
                 obj("cyl", x, 0, z, .2 * sc, 2.6 * sc, .2 * sc, (.34, .26, .2))
                 obj("sphere", x, 3.0 * sc, z, .9 * sc, .35 * sc, .9 * sc, WHITE)
             return
-        cols = {0: [(1.0, .74, .84), (1.0, .9, .94), (.72, .9, .56)],
-                1: [(.26, .62, .22), (.34, .72, .28), (.2, .52, .2)],
+        cols = {0: [(1.0, .58, .74), (1.0, .86, .92), (.72, .88, .52), (1.0, .74, .84)],
+                1: [(.18, .50, .16), (.36, .68, .22), (.62, .74, .26), (.24, .58, .2)],
                 2: [(.78, .76, .16), (.9, .56, .12), (.86, .28, .1), (.7, .72, .2), (.82, .66, .14)]}[s]
         obj("cyl", x, 0, z, .22 * sc, 2.2 * sc, .22 * sc, (.4, .3, .22))
         c1, c2 = rng.choice(cols), rng.choice(cols)
@@ -951,13 +1022,23 @@ class World:
             self._tree(tx, tz, sc)
             self.C(tx, tz, .5, 2)
         free = lambda: self._free_spot()
-        if s == 0:                                              # весна: цветы
+        if s == 0:                                              # весна: цветы, лепестки, клумба
             for i in range(90):
                 x, z = free()
                 c = rng.choice([(1.0, .5, .7), (1.0, 1.0, 1.0), (1.0, .9, .3), (.7, .6, 1.0)])
                 obj("cyl", x, .02, z, .02, .22, .02, (.2, .6, .2))
                 obj("sphere", x, .26, z, .1, .07, .1, c)
-        elif s == 1:                                            # лето: подсолнухи, бассейн, мяч
+            for i in range(70):
+                x, z = free()
+                obj("sphere", x, .03, z, rng.uniform(.18, .42), .025, rng.uniform(.12, .28),
+                    rng.choice([(1.0, .7, .8), (1.0, .88, .92), (1.0, .55, .72)]), ry=rng.uniform(0, 180))
+            buds = [(1.0, .42, .6), (1.0, .82, .3), (.95, .5, .78), (1.0, .95, .96)]
+            for i, (tx, tz) in enumerate(((-7.6, 10.4), (-6.7, 10.0), (-8.2, 11.0), (-7.1, 11.4),
+                                          (-6.2, 10.8), (-8.0, 9.6), (-6.5, 11.8), (-7.8, 12.0))):
+                obj("cyl", tx, .02, tz, .03, .55, .03, (.22, .58, .26))
+                obj("sphere", tx, .48, tz, .13, .06, .13, (.32, .66, .3))
+                obj("sphere", tx, .64, tz, .1, .16, .1, buds[i % 4])
+        elif s == 1:                                            # лето: подсолнухи, бассейн, облака
             for x in np.arange(-14.5, 15, 2.3):
                 obj("cyl", float(x), 0, -10.6, .04, 1.7, .04, (.2, .55, .2))
                 obj("cyl", float(x) - .05, 1.72, -10.6, .3, .07, .3, (1.0, .82, .1), rz=90)
@@ -966,10 +1047,16 @@ class World:
             obj("cyl", 13.2, .2, 2.2, 1.5, .16, 1.5, (.35, .75, 1.0), lit=False)
             obj("sphere", 12.4, .35, 6.2, .32, .32, .32, RED)
             obj("sphere", 12.4, .35, 6.2, .33, .2, .33, WHITE)
-            obj("sphere", 60, 70, -120, 7, 7, 7, (1.0, .92, .3), lit=False)
+            obj("sphere", 78, 86, -168, 11, 11, 11, (1.0, .9, .42), lit=False)
             for i in range(30):
                 x, z = free()
                 obj("sphere", x, .08, z, .1, .07, .1, rng.choice([(1.0, .85, .2), (1.0, .55, .2)]))
+            # облака выше горок (рельсы не поднимаются выше ~38)
+            for cx, cz, sc in ((-48, -80, 1.25), (36, -100, 1.05), (-78, 16, 1.0), (62, 48, 1.15), (8, -36, .85)):
+                cy = 64
+                obj("sphere", cx, cy, cz, 8 * sc, 2.8 * sc, 5.5 * sc, (1.0, .98, .94), lit=False)
+                obj("sphere", cx + 4.5 * sc, cy - .5 * sc, cz + 1.4 * sc, 5.5 * sc, 2.3 * sc, 4 * sc, (.99, .96, .9), lit=False)
+                obj("sphere", cx - 4 * sc, cy - .3 * sc, cz - 1 * sc, 4.8 * sc, 2.1 * sc, 3.6 * sc, (1.0, .97, .93), lit=False)
         elif s == 2:                                            # осень: тыквы, листья, сено
             for tx, tz in ((-4.2, 12.4), (-6.6, 11.6), (3.6, 12.6), (-8.2, 13.2), (6.2, 12.8)):
                 obj("sphere", tx, .3, tz, .42, .32, .42, (.98, .5, .1))
@@ -1113,7 +1200,7 @@ class World:
             glVertex3f(HW + t, H1, zz)
             glVertex3f(0, H1 + rise - .02, zz)
             glEnd()
-        # солнышко на фронтоне
+        # солнышко на фронтоне — во всех сезонах
         glEnable(GL_ALPHA_TEST)
         glAlphaFunc(GL_GREATER, .5)
         glColor3f(1, 1, 1)
@@ -1590,6 +1677,7 @@ class World:
             yy = .075 + (SZ0 - zz) / L * (F1 - .075)
             bx(SX0 + .05, yy, zz, .04, .95, .04, (.12, .12, .14))
         beam((SX0 + .05, 1.05, SZ0 - .2), (SX0 + .05, 1.05 + F1 - .075 - .1, SZ1 + .2), .08, (.2, .15, .12))
+        self._fireplace()
         self._place_furniture()
         self._pendant(3.7, H0, 2.3)
         # зеркало остаётся на стене ванной
@@ -1606,12 +1694,12 @@ class World:
         # «дыры» для картин: окна, двери и стыки с перегородками, чтобы рама не уходила в угол
         wins_f = [(DOOR_X, 1.3), (-6.2, 1.6), (4.0, 1.6), (AX, 1.1), (SX0, 1.4)]
         wins_b = [(-5.2, 1.7), (3.0, 1.55), (AX, 1.1), (SX0, 1.6)]
-        wins_w = [(-4.4, 1.6), (2.6, 1.6)]
+        wins_w = [(-4.4, 1.6), (2.6, 1.6), (FIRE_Z, 2.2)]
         wins_wu = [(-6.0, 1.6), (2.6, 1.6), (BZ, 1.3)]
         self._hang("x", -HD + ins, 2.05, -HW + 1.1, SX0 - 1.0, wins_b, 0, 3, 0)
         self._hang("x", HD - ins, 2.05, -HW + 1.1, SX0 - 1.0, wins_f, 180, 3, 2)
         self._hang("z", -HW + ins, 2.05, -HD + 1.1, HD - 1.1, wins_w, 90, 2, 1)
-        self._hang("z", HW - ins, 2.05, -HD + 1.1, HD - 1.1, [(0.4, 1.55)], -90, 2, 3)
+        # восточная стена первого этажа закрыта чуланом и лестницей, картины туда не вешаем
         self._hang("z", AX - ins, 2.05, -HD + 1.2, HD - 1.2, [(0.0, 3.2)], -90, 2, 4)
         self._hang("x", -HD + ins, U + 1.9, -HW + 1.1, HW - 1.1, wins_b, 0, 3, 1)
         self._hang("x", HD - ins, U + 1.9, -HW + 1.1, SX0 - 1.0, [(-6.2, 1.6), (4.0, 1.6), (AX, 1.1)], 180, 2, 5)
@@ -1628,6 +1716,7 @@ class World:
             "stairs": (5.3, 6.7), "bed": fa.get("bed", (-5.6, 1.5, 1)),
             "pic5": (-4.2, -3.2), "mirror": (4.6, .2),
             "laundry": fa.get("laundry", (5.5, 2.6, 1)), "window": (-7.6, 2.6), "window2": (-5.2, -6.5),
+            "fire": (FIRE_X + 1.7, FIRE_Z),
         }
         # -- стены/полы: периметр и перегородки (коллайдеры)
 
@@ -1651,6 +1740,7 @@ class World:
             self.C(SX0 - .05, float(z), .2, 0)
         for x in np.arange(SX0, HW + .01, .4):
             self.C(float(x), SZ1 - .1, .2, 0)
+        self.crun("z", SX0, -HD, SZ1, 0)                    # западная стена чулана, от задней стены до лестницы
         # перегородки 2 этажа
         self.crun("x", BZ, -HW, SX0, 1, [(BED_DX, .82), (BATH_DX, .82)])
         self.crun("z", RX, BZ, HD, 1, [(LAUN_DZ, .82)])
@@ -1769,7 +1859,92 @@ class World:
                 obj("box", sg * .1, .105, -.03, .15, .035, .01, (.6, .25, .65), lit=False)
             obj("box", 0, -.12, -.02, .22, .03, .01, (.1, 0, .1), lit=False)
             pop()
+        self._flames(t)
+        self._aurora(t)
         self._weather(t, cam)
+
+    def _fireplace(self):
+        """Камин в гостиной. Дрова есть всегда, огонь рисуется отдельно и только зимой."""
+        x, z = FIRE_X, FIRE_Z
+        brick = (.58, .26, .20)
+        soot = (.10, .07, .06)
+        stone = (.52, .50, .46)
+        bx(x + .46, .09, z, 1.05, .08, 2.05, stone)
+        bx(x, .12, z - .62, .58, 1.08, .32, brick)
+        bx(x, .12, z + .62, .58, 1.08, .32, brick)
+        bx(x, 1.16, z, .62, .34, 1.58, brick)
+        bx(x + .08, .18, z, .38, .92, .90, soot)
+        bx(x + .14, 1.48, z, .84, .09, 1.92, DWOOD)
+        bx(x + .14, 1.57, z, .72, .05, 1.72, WOOD)
+        bx(x - .04, 1.55, z, .46, H0 - 1.62, 1.22, brick)
+        obj("cyl", x + .14, .26, z - .24, .075, .52, .075, (.32, .18, .10), rx=90)
+        obj("cyl", x + .2, .36, z - .2, .065, .48, .065, (.40, .22, .12), rx=90, ry=16)
+        for sg in (-1, 1):
+            bx(x + .22, .16, z + sg * .28, .06, .22, .06, (.16, .14, .14))
+        if self.season != 3:
+            obj("sphere", x + .2, .4, z, .05, .03, .12, (.28, .28, .28), lit=False)
+        self.cline(x + .28, z, 0, .9, .3, 0, "z")
+
+    def _flames(self, t):
+        if self.season != 3:
+            return
+        x, z = WX + FIRE_X + .36, WZ + FIRE_Z
+        for i in range(6):
+            ph = i * 1.17
+            sway = math.sin(t * 6.5 + ph) * .045
+            h = .26 + .22 * (.5 + .5 * math.sin(t * 8.0 + ph * 1.7))
+            hot = .5 + .5 * math.sin(t * 11 + ph)
+            col = (1.0, .5 + .28 * hot, .1) if i % 2 else (1.0, .84, .3)
+            zz = z + (i - 2.5) * .1
+            obj("cone", x + sway, .32, zz, .085 + .015 * (i % 2), h, .07, col, lit=False)
+            obj("sphere", x + sway * .6, .32 + h * .7, zz, .04, .055, .04, (1.0, .95, .6), lit=False)
+        for i in range(5):
+            ph = i * 2.1
+            life = (t * .4 + ph) % 1.0
+            obj("sphere", x + math.sin(ph) * .2, .48 + life * 1.05, z + math.cos(ph * 1.3) * .18,
+                .018, .018, .018, (1.0, .42 + .25 * (1 - life), .08), lit=False)
+
+    def _aurora(self, t):
+        """Северное сияние: несколько занавесов в небе. Пока только зима."""
+        if self.season != 3:
+            return
+        # далеко за лесом и за горками: рельсы доходят примерно до 260 м от дома
+        bands = (
+            (-2.8, -0.15, 400, 110, 230, (.16, .88, .42), .16, 0.0),
+            (-2.35, -0.5, 450, 145, 260, (.20, .68, .95), .11, 1.4),
+            (-2.05, -0.8, 370, 95, 190, (.52, .24, .90), .2, 2.0),
+            (1.0, 2.75, 420, 125, 240, (.28, .90, .62), .1, 0.8),
+        )
+        glDisable(GL_LIGHTING)
+        glDisable(GL_FOG)
+        glDisable(GL_TEXTURE_2D)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        glDepthMask(GL_FALSE)
+        n = 26
+        for a0, a1, rad, y0, y1, col, spd, phase in bands:
+            mid = (y0 + y1) * .55
+            drift = math.sin(t * .15 + phase) * .06
+            for ya, yb, aa, ab in ((y0, mid, 0.0, .22), (mid, y1, .22, .02)):
+                glBegin(GL_QUAD_STRIP)
+                for k in range(n):
+                    u = k / (n - 1)
+                    ang = a0 + (a1 - a0) * u + drift
+                    fold = math.sin(u * 8.0 + t * spd * 2.2 + phase) * 12.0
+                    rise = math.sin(u * 3.2 + phase) * 10.0
+                    x = math.cos(ang) * (rad + fold)
+                    z = math.sin(ang) * (rad + fold * .65)
+                    edge = math.sin(u * math.pi)
+                    glColor4f(col[0], col[1], col[2], aa * edge)
+                    glVertex3f(WX + x, ya + rise * .35, WZ + z)
+                    glColor4f(col[0], col[1], col[2], ab * edge)
+                    glVertex3f(WX + x + fold * .15, yb + rise, WZ + z)
+                glEnd()
+        glDepthMask(GL_TRUE)
+        glDisable(GL_BLEND)
+        glEnable(GL_TEXTURE_2D)
+        glEnable(GL_FOG)
+        glEnable(GL_LIGHTING)
 
     def _weather(self, t, cam):
         s = self.season
@@ -1793,12 +1968,14 @@ class World:
                 x = (a + math.sin(t * .7 + ph * 6) * 1.0 - cx) % S - S / 2 + cx
                 z = (c + math.cos(t * .5 + ph * 5) * .7 - cz) % S - S / 2 + cz
                 y = cy + 10 - ((t * sp * 1.0 + b * 2 + ph * 7) % 20)
-                obj("box", x, y, z, .14, .02, .1, (1.0, .78, .86), rx=t * 100 * sp + ph * 90, rz=t * 70, lit=False)
-            elif i < 14:                                     # лето: пылинки-светлячки
-                x = (a + math.sin(t * .5 + ph * 6) * 2 - cx) % S - S / 2 + cx
-                z = (c + math.cos(t * .4 + ph * 5) * 2 - cz) % S - S / 2 + cz
-                y = max(1.0, cy - 3 + (b % 8) + math.sin(t * 2 + ph * 9) * .5)
-                obj("sphere", x, y, z, .06, .06, .06, (1.0, .95, .5), lit=False)
+                col = ((1.0, .72, .82), (1.0, .9, .94), (1.0, .58, .74))[i % 3]
+                obj("box", x, y, z, .2, .02, .12, col, rx=t * 100 * sp + ph * 90, rz=t * 70, lit=False)
+            elif s == 1 and i < 40:                           # лето: бабочки
+                x = (a + math.sin(t * .35 + ph * 6) * 2.6 - cx) % S - S / 2 + cx
+                z = (c + math.cos(t * .28 + ph * 5) * 2.2 - cz) % S - S / 2 + cz
+                y = 1.5 + (b % 5) + math.sin(t * 1.2 + ph * 7) * .75
+                col = ((1.0, .84, .28), (1.0, .68, .8), (1.0, .97, .9), (.62, .8, 1.0))[i % 4]
+                obj("box", x, y, z, .2, .018, .1, col, ry=t * 25 + ph * 80, rz=math.sin(t * 11 + ph * 9) * 42, lit=False)
 
 
 def rng_col(rng, season):
@@ -1822,6 +1999,10 @@ def spot_lines(world):
         "pic5": ["Здесь мы вдвоём. Я нарисовал себя побольше.", "Ведь я всегда рядом. Всегда."],
         "mirror": ["Ой. Ты увидел меня? Я живу в зеркале.", "Не бойся. Я просто хотел быть ближе."],
         "laundry": ["Я постирал твои вещи. Все, что ты оставил.", "Они пахнут %s. Правда?" % sn],
+        "fire": (["Я затопил камин. Снаружи темно и холодно, а здесь тепло.",
+                  "Смотри на огонь. Я буду смотреть на тебя."] if se == 3 else
+                 ["Камин погашен. Огонь бывает только зимой.",
+                  "Дрова лежат и ждут. Сейчас им не время."]),
     }
     return L
 
@@ -1835,7 +2016,8 @@ def add_spots(world):
             ("kitchen", 2.2, 0, "Кухня", "kitchen"), ("stairs", 2.0, 0, "Лестница", "stairs"),
             ("bed", 2.4, 1, "Кровать", "bed"), ("pic5", 2.0, 1, "Рисунок", "pic5"),
             ("mirror", 2.0, 1, "Зеркало", "mirror"), ("laundry", 2.0, 1, "Стиральная машина", "laundry"),
-            ("window", 2.0, 1, "Окно", "window"), ("window2", 2.0, 0, "Окно", "window"))
+            ("window", 2.0, 1, "Окно", "window"), ("window2", 2.0, 0, "Окно", "window"),
+            ("fire", 2.3, 0, "Камин", "fire"))
     movable = {"sofa", "food", "shelf", "kitchen", "bed", "laundry"}
     for key, r, lvl, lab, lk in spec:
         if key in movable and key not in world.furn_anchors:
